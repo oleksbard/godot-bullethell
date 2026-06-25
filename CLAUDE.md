@@ -15,8 +15,11 @@ marine **auto-fires** its equipped weapons, and you collect loot between waves �
 The sibling `../godot-prototype` is the source of these conventions and the
 reused `src/lib/` utilities.
 
-**Status:** iteration 1 = the movement vertical slice (marine + hell island +
-WASD). No demons / weapons / shooting yet. Spec: `docs/superpowers/specs/`.
+**Status:** marine (WASD) on the hell island; guns float around him and
+auto-fire bolts at the closest imps; imps spawn in doubling waves (15 → 30 → …),
+dying into gib chunks + blood decals; off-screen imps are flagged on the screen
+border. Next up: real gun/imp models, player health/damage. Specs:
+`docs/superpowers/specs/`.
 
 ## Commands
 
@@ -81,13 +84,23 @@ Full rules in [`docs/guidelines/`](docs/guidelines/); the essentials:
 ```
 main.tscn                  # composition-root scene -> src/world/main.gd
 src/
-  world/  main.gd          # composition root: env + key light + island + marine + camera
-          hell_island.gd   # procedural charred-basalt island (IslandShape + ColorUtil)
-  marine/ marine.gd        # WASD controller; instances marine_01.glb + drives a code walk on its bones
-  lib/    mesh_factory.gd  color_util.gd  island_shape.gd   # reused from ../godot-prototype
-models/   marine_01.glb    # imported rigged marine (Mixamo-style bones, no baked anims)
-test/     run_tests.gd     # headless test runner (+ run_tests.sh)
-docs/     guidelines/  ideas/hell-atmosphere.md  superpowers/specs/
+  world/   main.gd          # composition root: env, light, island, marine, waves, weapons, UI, camera
+           hell_island.gd   # procedural charred-basalt island (IslandShape + ColorUtil)
+  marine/  marine.gd        # WASD controller; instances marine_01.glb + drives a code walk on its bones
+  enemies/ imp.gd           # "weak imp" placeholder enemy (group "imps"); drifts toward player
+           wave_spawner.gd  # scatters a wave of imps across the island (wave 1 = 15)
+  weapons/ gun.gd           # floating placeholder gun; aims, fires bolts on a cooldown, muzzle flash
+           weapon_ring.gd   # N guns around the player; gun i targets the i-th closest imp
+  fx/      projectile.gd    # homing bolt; one-shot kills its target imp
+           gib.gd           # a flying chunk of a blown-up imp (ballistic, settles, fades)
+           gore.gd          # spawns the gib burst + blood decals on death
+  ui/      offscreen_indicators.gd  # screen-border arrows pointing at off-screen imps
+  audio/   shot_sfx.gd      # plays a random pistol clip per shot (pooled players)
+  lib/     mesh_factory.gd  color_util.gd  island_shape.gd   # reused from ../godot-prototype
+models/    marine_01.glb    # imported rigged marine (Mixamo-style bones, no baked anims)
+sound/     pistol_01..05.mp3  # shot samples (random per fire)
+test/      run_tests.gd     # headless test runner (+ run_tests.sh)
+docs/      guidelines/  ideas/hell-atmosphere.md  superpowers/specs/
 ```
 
 Cross-script references load via `preload()` consts (robust on a cold clone / CI

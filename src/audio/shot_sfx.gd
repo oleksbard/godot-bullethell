@@ -1,0 +1,61 @@
+class_name ShotSfx
+extends Node
+## Plays a random pistol-shot sample on each gun fire. The raw clips have very
+## different loudness (measured peaks below span ~19 dB), so each one gets a
+## per-clip volume trim at load that brings them to the SAME effective peak —
+## 90% of the loudest clip's level — so the random shots sound even. Slight pitch
+## jitter keeps repeats from sounding identical.
+
+const CLIPS := [
+	"res://sound/pistol_01.mp3",
+	"res://sound/pistol_02.mp3",
+	"res://sound/pistol_03.mp3",
+	"res://sound/pistol_04.mp3",
+	"res://sound/pistol_05.mp3",
+]
+# Measured max peak (dBFS) per clip, same order as CLIPS (ffmpeg volumedetect).
+const CLIP_PEAKS_DB := [-1.0, -4.3, -14.2, -16.6, -20.4]
+const MASTER_DB := -8.0       # overall modest level
+const NINETY_PCT_DB := -0.92  # 20*log10(0.9): "90% of the loudest"
+const POOL := 4
+const PITCH_JITTER := 0.08
+
+var _streams: Array[AudioStream] = []
+var _volumes: Array[float] = []     # per-clip volume_db so all hit the same peak
+var _players: Array[AudioStreamPlayer] = []
+var _next := 0
+var _rng := RandomNumberGenerator.new()
+
+
+func _ready() -> void:
+	_rng.randomize()
+
+	var loudest := CLIP_PEAKS_DB[0]
+	for v in CLIP_PEAKS_DB:
+		loudest = maxf(loudest, v)
+	var target: float = loudest + MASTER_DB + NINETY_PCT_DB   # common effective peak
+
+	for i in CLIPS.size():
+		var s: AudioStream = load(CLIPS[i])
+		if s is AudioStreamMP3:
+			s.loop = false        # one-shot — never loop a gunshot
+		_streams.append(s)
+		_volumes.append(target - CLIP_PEAKS_DB[i])            # boost quiet clips, trim loud ones
+
+	for i in POOL:
+		var p := AudioStreamPlayer.new()
+		add_child(p)
+		_players.append(p)
+
+
+## Fire-and-forget: play a random clip (volume-evened) on the next pooled player.
+func play() -> void:
+	if _streams.is_empty():
+		return
+	var idx := _rng.randi_range(0, _streams.size() - 1)
+	var p := _players[_next]
+	_next = (_next + 1) % _players.size()
+	p.stream = _streams[idx]
+	p.volume_db = _volumes[idx]
+	p.pitch_scale = 1.0 + _rng.randf_range(-PITCH_JITTER, PITCH_JITTER)
+	p.play()

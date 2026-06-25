@@ -9,6 +9,9 @@ extends Node3D
 
 const HellIsland := preload("res://src/world/hell_island.gd")
 const MarineScript := preload("res://src/marine/marine.gd")
+const WaveSpawnerScript := preload("res://src/enemies/wave_spawner.gd")
+const WeaponRingScript := preload("res://src/weapons/weapon_ring.gd")
+const IndicatorsScript := preload("res://src/ui/offscreen_indicators.gd")
 
 const CAM_OFFSET := Vector3(0.0, 13.0, 7.0)
 const CAM_SIZE := 18.0             # orthographic vertical extent (smaller = closer)
@@ -26,6 +29,21 @@ func _ready() -> void:
 	# editor having built the global class cache — works on a cold clone / CI.
 	marine = MarineScript.new()
 	add_child(marine)
+
+	# Wave 1 of imps scattered across the island.
+	var spawner := WaveSpawnerScript.new()
+	spawner.player = marine
+	add_child(spawner)
+
+	# Guns floating around the marine, auto-aiming at the closest imps.
+	var weapons := WeaponRingScript.new()
+	weapons.player = marine
+	add_child(weapons)
+
+	# Screen-border markers for off-screen imps.
+	var ui := CanvasLayer.new()
+	ui.add_child(IndicatorsScript.new())
+	add_child(ui)
 
 	_build_camera()
 

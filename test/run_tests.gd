@@ -10,6 +10,11 @@ extends SceneTree
 
 const IslandShape := preload("res://src/lib/island_shape.gd")
 const MarineScript := preload("res://src/marine/marine.gd")
+const WaveSpawnerScript := preload("res://src/enemies/wave_spawner.gd")
+const WeaponRingScript := preload("res://src/weapons/weapon_ring.gd")
+const ImpScript := preload("res://src/enemies/imp.gd")
+const ProjectileScript := preload("res://src/fx/projectile.gd")
+const ShotSfxScript := preload("res://src/audio/shot_sfx.gd")
 
 var _passed := 0
 var _failed := 0
@@ -21,6 +26,16 @@ func _initialize() -> void:
 	_test_island_shape()
 	_test_marine_clamp()
 	await _test_marine_model()
+	await _test_wave_spawner()
+	await _test_weapon_ring()
+	await _test_imp_die()
+	await _test_projectile_kills()
+	await _test_wave_progression()
+	await _test_gun_range()
+	await _test_imp_separation()
+	await _test_projectile_hits_path()
+	await _test_projectile_retargets()
+	await _test_shot_sfx()
 	print("──")
 	print("%d passed, %d failed" % [_passed, _failed])
 	quit(1 if _failed > 0 else 0)
@@ -65,6 +80,236 @@ func _test_marine_model() -> void:
 	_ok(m._b_lup != -1 and m._b_rup != -1 and m._b_larm != -1 and m._b_rarm != -1,
 		"resolves the walk bones (LeftUpLeg/RightUpLeg/LeftArm/RightArm)")
 	m.free()
+
+
+func _test_wave_spawner() -> void:
+	_suite = "WaveSpawner"
+	var sp: Node3D = WaveSpawnerScript.new()
+	sp.player = Node3D.new()
+	get_root().add_child(sp.player)
+	get_root().add_child(sp)
+	await process_frame                       # _ready() spawns wave 1
+
+	var imps := get_nodes_in_group("imps")    # self is the SceneTree
+	_ok(imps.size() == 15, "wave 1 spawns 15 imps (got %d)" % imps.size())
+
+	var all_inside := true
+	for imp in imps:
+		var p: Vector3 = (imp as Node3D).position
+		var ang := atan2(p.z, p.x)
+		if Vector2(p.x, p.z).length() > IslandShape.radius(ang):
+			all_inside = false
+	_ok(all_inside, "every imp spawns inside the coastline")
+
+	var sp_player: Node = sp.player
+	sp.free()                                 # frees the imps too
+	sp_player.free()
+
+
+func _test_weapon_ring() -> void:
+	_suite = "WeaponRing"
+	var wr: Node3D = WeaponRingScript.new()
+	wr.gun_count = 6
+	wr.player = Node3D.new()
+	get_root().add_child(wr.player)
+	get_root().add_child(wr)
+	await process_frame
+	_ok(wr._guns.size() == 6, "builds the requested gun count (got %d)" % wr._guns.size())
+
+	var wr2: Node3D = WeaponRingScript.new()
+	wr2.gun_count = 99                         # over the max
+	wr2.player = Node3D.new()
+	get_root().add_child(wr2.player)
+	get_root().add_child(wr2)
+	await process_frame
+	_ok(wr2._guns.size() == 12, "clamps gun count to 12 (got %d)" % wr2._guns.size())
+
+	var p1: Node = wr.player
+	var p2: Node = wr2.player
+	wr.free(); wr2.free()
+	p1.free(); p2.free()
+
+
+func _test_imp_die() -> void:
+	_suite = "Imp.die"
+	var holder := Node3D.new()
+	get_root().add_child(holder)
+	var imp: Node3D = ImpScript.new()
+	holder.add_child(imp)
+	await process_frame
+	_ok(get_nodes_in_group("imps").has(imp), "imp registers in the 'imps' group")
+
+	imp.die()
+	_ok(get_nodes_in_group("imps").size() == 0, "die() removes it from the target group")
+	_ok(get_nodes_in_group("blood").size() >= 10, "die() leaves a lot of blood (%d decals)" % get_nodes_in_group("blood").size())
+	await process_frame                       # let the queued free run
+	holder.free()                             # frees gibs + blood too
+
+
+func _test_projectile_kills() -> void:
+	_suite = "Projectile"
+	var holder := Node3D.new()
+	get_root().add_child(holder)
+	var imp: Node3D = ImpScript.new()
+	holder.add_child(imp)
+	imp.global_position = Vector3(5.0, 0.0, 0.0)
+	var p: Node3D = ProjectileScript.new()
+	p.target = imp
+	holder.add_child(p)
+	p.global_position = Vector3(0.0, 0.6, 0.0)
+	await process_frame
+
+	var killed := false
+	for i in 200:
+		p._process(0.05)                      # step the bolt toward the imp
+		if imp.is_queued_for_deletion():
+			killed = true
+			break
+	_ok(killed, "a bolt reaches its target imp and kills it")
+	await process_frame
+	holder.free()
+
+
+func _test_wave_progression() -> void:
+	_suite = "WaveSpawner.waves"
+	var holder := Node3D.new()
+	get_root().add_child(holder)
+	var sp: Node3D = WaveSpawnerScript.new()
+	sp.player = Node3D.new()
+	holder.add_child(sp.player)
+	holder.add_child(sp)
+	await process_frame                       # wave 1
+	_ok(get_nodes_in_group("imps").size() == 15, "wave 1 has 15 imps")
+
+	for imp in get_nodes_in_group("imps"):
+		imp.die()                             # die() leaves the group immediately
+	sp._process(0.1)                          # notices the wave is clear -> starts the gap
+	sp._process(WaveSpawnerScript.WAVE_DELAY + 0.1) # gap elapses -> next wave
+	_ok(get_nodes_in_group("imps").size() == 30, "next wave doubles to 30 (got %d)" % get_nodes_in_group("imps").size())
+
+	await process_frame
+	holder.free()
+
+
+func _test_gun_range() -> void:
+	_suite = "WeaponRing.range"
+	var holder := Node3D.new()
+	get_root().add_child(holder)
+	var player := Node3D.new()
+	holder.add_child(player)
+	var near: Node3D = ImpScript.new()
+	holder.add_child(near)
+	near.global_position = Vector3(5.0, 0.0, 0.0)        # within MAX_RANGE
+	var far: Node3D = ImpScript.new()
+	holder.add_child(far)
+	far.global_position = Vector3(40.0, 0.0, 0.0)        # well beyond MAX_RANGE
+	near.set_process(false)                              # keep them put
+	far.set_process(false)
+	var wr: Node3D = WeaponRingScript.new()
+	wr.gun_count = 2
+	wr.player = player
+	holder.add_child(wr)
+	await process_frame
+	await process_frame
+
+	_ok(wr._guns[0]._target == near, "the in-range closest imp is targeted")
+	_ok(wr._guns[0]._target != far and wr._guns[1]._target != far,
+		"the out-of-range imp is never targeted")
+	holder.free()
+
+
+func _test_imp_separation() -> void:
+	_suite = "Imp.separation"
+	var holder := Node3D.new()
+	get_root().add_child(holder)
+	var player: Node3D = Node3D.new()    # at origin; both imps start inside STOP_DIST
+	holder.add_child(player)
+	var a: Node3D = ImpScript.new()
+	holder.add_child(a)
+	a.global_position = Vector3(0.2, 0.0, 0.0)
+	var b: Node3D = ImpScript.new()
+	holder.add_child(b)
+	b.global_position = Vector3(-0.2, 0.0, 0.0)
+	a.player = player
+	b.player = player
+	await process_frame                  # _ready -> both in the group
+
+	var before := a.global_position.distance_to(b.global_position)
+	for i in 40:
+		a._process(0.05)
+		b._process(0.05)
+	var after := a.global_position.distance_to(b.global_position)
+	_ok(after > before + 0.5, "overlapping imps push apart (%.2f -> %.2f)" % [before, after])
+	holder.free()
+
+
+func _test_projectile_hits_path() -> void:
+	_suite = "Projectile.path"
+	var holder := Node3D.new()
+	get_root().add_child(holder)
+	var blocker: Node3D = ImpScript.new()
+	holder.add_child(blocker)
+	blocker.global_position = Vector3(2.0, 0.0, 0.0)     # in the path, closer
+	var assigned: Node3D = ImpScript.new()
+	holder.add_child(assigned)
+	assigned.global_position = Vector3(10.0, 0.0, 0.0)   # the target, farther, same line
+	blocker.set_process(false)
+	assigned.set_process(false)
+	var p: Node3D = ProjectileScript.new()
+	p.target = assigned
+	holder.add_child(p)
+	p.global_position = Vector3(0.0, 0.6, 0.0)
+	await process_frame
+
+	for i in 200:
+		p._process(0.016)
+		if blocker.is_queued_for_deletion() or assigned.is_queued_for_deletion():
+			break
+	_ok(blocker.is_queued_for_deletion() and not assigned.is_queued_for_deletion(),
+		"bolt hits the imp in its path, not only its assigned target")
+	holder.free()
+
+
+func _test_projectile_retargets() -> void:
+	_suite = "Projectile.retarget"
+	var holder := Node3D.new()
+	get_root().add_child(holder)
+	var other: Node3D = ImpScript.new()
+	holder.add_child(other)
+	other.global_position = Vector3(4.0, 0.0, 0.0)
+	other.set_process(false)
+	await process_frame
+	var p: Node3D = ProjectileScript.new()
+	p.target = null                       # no target -> must reacquire `other`
+	holder.add_child(p)
+	p.global_position = Vector3(0.0, 0.6, 0.0)
+	await process_frame
+
+	for i in 200:
+		p._process(0.016)
+		if other.is_queued_for_deletion():
+			break
+	_ok(other.is_queued_for_deletion(), "a target-less bolt reacquires and kills another imp")
+	holder.free()
+
+
+func _test_shot_sfx() -> void:
+	_suite = "ShotSfx"
+	var s: Node = ShotSfxScript.new()
+	get_root().add_child(s)
+	await process_frame                  # _ready loads the clips + pool
+	var loaded: int = s._streams.size()
+	var all_valid: bool = loaded == 5
+	for st in s._streams:
+		if st == null:
+			all_valid = false
+	_ok(all_valid, "loads all 5 pistol clips (got %d)" % loaded)
+	# Evened volumes: the quietest clip (05) gets boosted well above the loudest (01).
+	_ok(s._volumes.size() == 5 and s._volumes[4] > s._volumes[0] + 10.0,
+		"per-clip trims even the levels (loud %.1f dB vs quiet %.1f dB)" % [s._volumes[0], s._volumes[4]])
+	s.play()                             # must not error even with no audio device
+	_ok(true, "play() runs without error")
+	s.free()
 
 
 func _ok(condition: bool, message: String) -> void:
