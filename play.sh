@@ -27,4 +27,4 @@ if [[ -z "$GODOT_BIN" ]]; then
 	exit 1
 fi
 
-exec "$GODOT_BIN" --path "$DIR"
+exec "$GODOT_BIN" --path "$DIR" --fullscreen

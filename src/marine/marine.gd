@@ -4,17 +4,20 @@ extends Node3D
 ## clamp to the hell island's coastline. The body is the imported rigged model
 ## (models/marine_01.glb); this script instances it and drives its skeleton.
 ##
-## Facing is decoupled from movement: the marine always turns to face the nearest
-## imp (combat stance) while WASD still moves it in screen space — so it can
-## strafe or backpedal while keeping the guns on the threat. The legs reverse
-## their swing when moving backward relative to facing, so it reads as a
-## backpedal rather than a moonwalk.
+## Facing is decoupled from movement: the body only turns *while the player is
+## moving*, and it turns toward the point "between" its two targeted imps so it
+## sits centred with the arms splayed evenly. Standing still, the body holds and
+## the arms keep tracking on their own. WASD moves it in screen space, so it can
+## strafe or backpedal; the legs reverse their swing when moving backward relative
+## to facing, so it reads as a backpedal rather than a moonwalk.
 ##
 ## The glb is rigged in a T-pose (arms straight out) with no real animations, so
 ## the pose is authored here:
 ##   * Legs swing front/back about their local X relative to rest.
-##   * Arms are *aimed* forward into a two-handed "hold" so the hand bones sit out
-##     front — the guns are bone-attached there (see get_hand_mounts()).
+##   * Each arm *aims at its own imp* (right hand → nearest, left → 2nd-nearest),
+##     clamped to ARM_SPLAY off the body's facing. The guns are rigidly fixed in
+##     the hands (see get_hand_mounts()), barrel aligned with the arm, so the
+##     whole arm rotates to point the gun — the gun never twists on its own.
 ## Movement/turning happen on this root; the bob moves the *model's* local Y so
 ## the camera-followed root never shakes.
 
@@ -31,13 +34,17 @@ const EDGE_MARGIN := 1.0
 const MODEL_YAW := PI
 const MODEL_Y_OFFSET := 0.0
 
-# Walk + hold pose.
+# Walk + arm aim.
 const WALK_FREQ := 9.0
-const LEG_SWING := 0.6      # leg front/back swing (radians) at full speed
-const ARM_OUT := 0.22       # sideways spread of the held hands
-const ARM_DOWN := 0.45      # how far the held hands drop below the shoulders
-const ARM_FWD := 0.9        # forward reach of the two-handed hold (dominant axis)
-const ARM_SWING := 0.12     # subtle forward/back hand sway while walking
+const LEG_SWING := 0.6              # leg front/back swing (radians) at full speed
+const ARM_SPLAY := deg_to_rad(85.0) # max each arm may swing off the body's facing
+const ARM_DOWN_TILT := 0.25         # how far the aimed arms angle down toward the target
+const AIM_SPEED := 7.0              # how fast an arm swings to a new target (some lag, not instant)
+const ARM_CENTER_BAND := deg_to_rad(25.0)  # imps this near dead-ahead are fair game for either hand
+const ARM_REST_FWD := 0.2           # idle arms hang down + a little forward
+const ARM_REST_OUT := 0.12          # ...and splayed a little outward
+const RIGHT_SIDE := -1.0            # right hand covers the dev<0 half-sphere (verified by render)
+const LEFT_SIDE := 1.0              # left hand covers the dev>0 half-sphere
 const BOB_HEIGHT := 0.06
 
 var current_velocity := Vector3.ZERO
@@ -50,7 +57,11 @@ var _b_larm := -1     # LeftArm
 var _b_rarm := -1     # RightArm
 var _rest := {}       # leg bone idx -> rest rotation Quaternion
 var _arm := {}        # arm bone idx -> aim data {pinv: Basis, rb: Basis, dir: Vector3}
-var _hand_mounts: Array[Node3D] = []   # BoneAttachment3D at the hands (guns hang here)
+var _hand_mounts: Array[Node3D] = []   # grip points at the hands (guns hang here)
+var _sorted_imps: Array = []           # imps sorted nearest-first, refreshed per frame
+var _hand_targets: Array = [null, null]  # [right, left] imp each hand covers (null = rest down)
+var _r_dir := Vector3.FORWARD          # smoothed aim direction of the right arm
+var _l_dir := Vector3.FORWARD          # smoothed aim direction of the left arm
 var _walk_phase := 0.0
 var _walk_amt := 0.0
 
@@ -81,22 +92,66 @@ func _ready() -> void:
 	_b_larm = _cache_arm("LeftArm", "LeftForeArm")
 	_b_rarm = _cache_arm("RightArm", "RightForeArm")
 
-	# Bone-attached mounts at the hands; the WeaponRing parents the held guns here
-	# so they ride the arms. Order is [right, left] to match gun slot order.
-	_make_hand_mount("RightHand")
-	_make_hand_mount("LeftHand")
+	# Grip points at the hands; the WeaponRing parents the held guns here so they
+	# ride the arms. Order is [right, left] to match gun slot order.
+	_make_hand_mount("RightHand", _b_rarm)
+	_make_hand_mount("LeftHand", _b_larm)
 
 
-## Bone-attached points at the hands, in [right, left] order. The WeaponRing's
-## first guns parent here so they sit in the marine's grip. Empty if the rig has
-## no hands (animation degrades to floating guns).
+## Grip points at the hands, in [right, left] order. The WeaponRing's first guns
+## parent here so they sit in the marine's grip. Empty if the rig has no hands
+## (animation degrades to floating guns).
 func get_hand_mounts() -> Array[Node3D]:
 	return _hand_mounts
 
 
 func _process(delta: float) -> void:
+	_refresh_targets()
+	_pick_hand_targets()
 	_handle_movement(delta)
 	_animate_walk(delta)
+	_aim_arms(delta)
+
+
+## Pick the imp each hand covers: the nearest one on that hand's half-sphere
+## (relative to the current facing), so the arms never cross. Imps near dead-ahead
+## (within ARM_CENTER_BAND) are eligible for either hand. null = nothing to shoot
+## on that side, so the hand rests down.
+func _pick_hand_targets() -> void:
+	var body_yaw := rotation.y
+	_hand_targets[0] = _nearest_on_side(body_yaw, RIGHT_SIDE)
+	_hand_targets[1] = _nearest_on_side(body_yaw, LEFT_SIDE)
+
+
+func _nearest_on_side(body_yaw: float, want_sign: float) -> Node3D:
+	for imp in _sorted_imps:                      # already nearest-first
+		var to: Vector3 = (imp as Node3D).global_position - global_position
+		to.y = 0.0
+		if to.length_squared() < 0.0001:
+			continue
+		var dev := wrapf(atan2(-to.x, -to.z) - body_yaw, -PI, PI)
+		if want_sign * dev >= -ARM_CENTER_BAND:   # on this hand's side (or in the centre band)
+			return imp
+	return null
+
+
+## The imp a held gun should fire at (index 0 = right hand, 1 = left). The
+## WeaponRing reads this so the held pistols shoot where the arms point.
+func get_hand_target(index: int) -> Node3D:
+	if index < 0 or index >= _hand_targets.size():
+		return null
+	return _hand_targets[index]
+
+
+## Sort the live imps nearest-first once per frame; facing + per-arm aim read it.
+func _refresh_targets() -> void:
+	_sorted_imps.clear()
+	for imp in get_tree().get_nodes_in_group(ImpScript.GROUP):
+		if is_instance_valid(imp):
+			_sorted_imps.append(imp)
+	var origin := global_position
+	_sorted_imps.sort_custom(func(a, b):
+		return origin.distance_squared_to((a as Node3D).global_position) < origin.distance_squared_to((b as Node3D).global_position))
 
 
 func _handle_movement(delta: float) -> void:
@@ -115,35 +170,47 @@ func _handle_movement(delta: float) -> void:
 		dir = dir.normalized()
 		move = Vector3(dir.x, 0.0, dir.y)          # screen-aligned: W = away from camera
 
-	# Face the nearest imp (combat stance), independent of where we're moving.
-	# Fall back to facing the movement direction when no imps are around.
-	var enemy_dir := _nearest_enemy_dir()
-	var target_yaw := rotation.y
-	if enemy_dir != Vector3.ZERO:
-		target_yaw = atan2(-enemy_dir.x, -enemy_dir.z)   # Godot forward is -Z
-	elif move != Vector3.ZERO:
-		target_yaw = atan2(-move.x, -move.z)
-	rotation.y = lerp_angle(rotation.y, target_yaw, clampf(delta * TURN_SPEED, 0.0, 1.0))
+	# The body turns ONLY while moving, toward the midpoint between its two targeted
+	# imps (so it stays centred and the arms splay evenly). Standing still it holds;
+	# the arms keep tracking independently.
+	if move != Vector3.ZERO:
+		var target_yaw := _body_facing_yaw(move)
+		rotation.y = lerp_angle(rotation.y, target_yaw, clampf(delta * TURN_SPEED, 0.0, 1.0))
 
 	current_velocity = move * SPEED                 # world-space, decoupled from facing
 	position += current_velocity * delta
 	_clamp_to_island()
 
 
-## Horizontal vector to the closest live imp (ZERO if none). Used for facing.
-func _nearest_enemy_dir() -> Vector3:
-	var best := Vector3.ZERO
-	var best_d := INF
-	for imp in get_tree().get_nodes_in_group(ImpScript.GROUP):
-		if not is_instance_valid(imp):
-			continue
-		var to: Vector3 = (imp as Node3D).global_position - global_position
-		to.y = 0.0
-		var d := to.length_squared()
-		if d > 0.0001 and d < best_d:
-			best_d = d
-			best = to
-	return best
+## Yaw to face the point "between" the two hands' targets (their bisector). Falls
+## back to whichever hand has a target, then the movement direction, then the
+## current heading.
+func _body_facing_yaw(move: Vector3) -> float:
+	var d0 := _dir_to(_hand_targets[0])
+	var d1 := _dir_to(_hand_targets[1])
+	if d0 != Vector3.ZERO and d1 != Vector3.ZERO:
+		var bis := d0.normalized() + d1.normalized()
+		if bis.length() > 0.05:
+			return atan2(-bis.x, -bis.z)        # Godot forward is -Z
+		return atan2(-d0.x, -d0.z)              # targets opposite — just face the right one
+	if d0 != Vector3.ZERO:
+		return atan2(-d0.x, -d0.z)
+	if d1 != Vector3.ZERO:
+		return atan2(-d1.x, -d1.z)
+	if move != Vector3.ZERO:
+		return atan2(-move.x, -move.z)
+	return rotation.y
+
+
+## Horizontal vector from the marine to `node` (ZERO if null/invalid/coincident).
+func _dir_to(node: Node) -> Vector3:
+	if not is_instance_valid(node):
+		return Vector3.ZERO
+	var to: Vector3 = (node as Node3D).global_position - global_position
+	to.y = 0.0
+	if to.length_squared() < 0.0001:
+		return Vector3.ZERO
+	return to
 
 
 ## Keep the marine inside the coastline so it can't walk off into the void.
@@ -181,8 +248,6 @@ func _animate_walk(delta: float) -> void:
 	var s := sin(_walk_phase) * _walk_amt
 	_swing_bone(_b_lup, s * LEG_SWING * dir_sign)     # legs swing opposite each other
 	_swing_bone(_b_rup, -s * LEG_SWING * dir_sign)
-	_aim_arm(_b_larm, 1.0, -s)              # two-handed forward hold, slight sway with the walk
-	_aim_arm(_b_rarm, -1.0, s)
 	_model.position.y = MODEL_Y_OFFSET + absf(sin(_walk_phase)) * BOB_HEIGHT * _walk_amt
 
 
@@ -213,33 +278,98 @@ func _cache_arm(bone_name: String, child_name: String) -> int:
 	return b
 
 
-## Aim an upper arm into the two-handed forward hold (`side` = +1 left / -1
-## right), with a forward/back `reach` (-1..1) folded in for the walk sway.
-## Skeleton space: the character's front is +Z, left is +X, down is -Y, so the
-## hold points mostly +Z (forward) and a little -Y (down).
-func _aim_arm(b: int, side: float, reach: float) -> void:
+## Swing each arm toward its own imp (right → nearest, left → 2nd-nearest),
+## clamped to ARM_SPLAY off the body's facing and eased toward the new heading.
+## Because the gun is fixed to the hand with its barrel along the arm, aiming the
+## arm aims the gun.
+func _aim_arms(delta: float) -> void:
+	if _skel == null:
+		return
+	var body_yaw := rotation.y
+	_r_dir = _aim_one(_b_rarm, _hand_targets[0], body_yaw, _r_dir, RIGHT_SIDE, delta)
+	_l_dir = _aim_one(_b_larm, _hand_targets[1], body_yaw, _l_dir, LEFT_SIDE, delta)
+
+
+## Ease arm bone `b` toward its desired heading and apply it. With a target it
+## aims there (clamped to ARM_SPLAY off the facing); with none it drops to a
+## natural rest down. Smoothing a direction vector makes aim↔rest blend cleanly.
+func _aim_one(b: int, target: Node, body_yaw: float, cur_dir: Vector3, side: float, delta: float) -> Vector3:
+	if not _arm.has(b):
+		return cur_dir
+	var desired: Vector3
+	if is_instance_valid(target):
+		var to: Vector3 = (target as Node3D).global_position - global_position
+		to.y = 0.0
+		var aim_yaw := atan2(-to.x, -to.z) if to.length_squared() > 0.0001 else body_yaw
+		var final_yaw := splay_yaw(body_yaw, aim_yaw)
+		desired = Vector3(-sin(final_yaw), -ARM_DOWN_TILT, -cos(final_yaw))
+	else:
+		desired = _rest_dir(body_yaw, side)        # nothing on this side -> hang down
+
+	cur_dir = cur_dir.lerp(desired.normalized(), clampf(delta * AIM_SPEED, 0.0, 1.0))
+	if cur_dir.length() < 0.001:
+		cur_dir = desired
+	cur_dir = cur_dir.normalized()
+	var target_skel := (_skel.global_transform.basis.inverse() * cur_dir).normalized()
+	_apply_arm(b, target_skel)
+	return cur_dir
+
+
+## Natural resting aim for an idle hand: mostly straight down, a little forward and
+## a little out to its side, relative to the body's facing.
+func _rest_dir(body_yaw: float, side: float) -> Vector3:
+	var fwd := Vector3(-sin(body_yaw), 0.0, -cos(body_yaw))
+	var right := Vector3(-fwd.z, 0.0, fwd.x)       # body's right-ish (perpendicular)
+	return (Vector3.DOWN + fwd * ARM_REST_FWD + right * (side * ARM_REST_OUT)).normalized()
+
+
+## Clamp an aim yaw to within ARM_SPLAY of the body's facing. Pure, so it's testable.
+static func splay_yaw(body_yaw: float, aim_yaw: float) -> float:
+	var dev := clampf(wrapf(aim_yaw - body_yaw, -PI, PI), -ARM_SPLAY, ARM_SPLAY)
+	return body_yaw + dev
+
+
+## Rotate upper arm `b` so its rest pointing direction lines up with `target_skel`
+## (a direction in skeleton space).
+func _apply_arm(b: int, target_skel: Vector3) -> void:
 	if not _arm.has(b):
 		return
 	var d: Dictionary = _arm[b]
-	var target := Vector3(side * ARM_OUT, -ARM_DOWN, ARM_FWD + reach * ARM_SWING).normalized()
-	var swing := Quaternion(d["dir"], target)              # global rotation: rest dir -> target
+	var swing := Quaternion(d["dir"], target_skel)         # rest dir -> target
 	var new_basis := Basis(swing) * (d["rb"] as Basis)     # bone's new global basis
 	var local: Basis = (d["pinv"] as Basis) * new_basis    # back into parent-local space
 	_skel.set_bone_pose_rotation(b, local.get_rotation_quaternion())
 
 
-## Attach a BoneAttachment3D to a hand bone (no-op if the rig lacks it). It rides
-## the bone's animated pose, so a gun parented here stays in the marine's hand.
-func _make_hand_mount(bone_name: String) -> void:
+## Attach a grip point at a hand bone, oriented so a gun parented there (identity
+## local transform) has its barrel (-Z) aligned with the arm's pointing direction.
+## Then aiming the arm aims the gun; the gun never rotates on its own. No-op if the
+## rig lacks the hand bone or its arm wasn't cached.
+func _make_hand_mount(hand_name: String, arm_bone: int) -> void:
 	if _skel == null:
 		return
-	var bi := _skel.find_bone(bone_name)
-	if bi == -1:
+	var hand_bi := _skel.find_bone(hand_name)
+	if hand_bi == -1 or not _arm.has(arm_bone):
 		return
+
+	# Desired grip basis in skeleton space: -Z along the arm, +Y roughly up.
+	var arm_dir: Vector3 = (_arm[arm_bone]["dir"] as Vector3).normalized()
+	var z_axis := -arm_dir
+	var up_hint := Vector3.UP
+	if absf(z_axis.dot(up_hint)) > 0.95:
+		up_hint = Vector3.FORWARD
+	var x_axis := up_hint.cross(z_axis).normalized()
+	var y_axis := z_axis.cross(x_axis).normalized()
+	var desired := Basis(x_axis, y_axis, z_axis)
+	var grip_local := _skel.get_bone_global_rest(hand_bi).basis.inverse() * desired
+
 	var att := BoneAttachment3D.new()
-	att.bone_name = bone_name
+	att.bone_name = hand_name
 	_skel.add_child(att)
-	_hand_mounts.append(att)
+	var grip := Node3D.new()
+	grip.basis = grip_local
+	att.add_child(grip)
+	_hand_mounts.append(grip)
 
 
 func _find_skeleton(node: Node) -> Skeleton3D:

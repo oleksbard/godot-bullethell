@@ -8,6 +8,8 @@ extends Node3D
 const MeshFactory := preload("res://src/lib/mesh_factory.gd")
 const ImpScript := preload("res://src/enemies/imp.gd")
 
+signal hit_enemy            # emitted when this bolt kills an imp (drives the impact SFX)
+
 const SPEED := 38.25        # 15% slower than the original 45
 const HIT_DIST := 0.7
 const LIFETIME := 2.0
@@ -49,6 +51,7 @@ func _process(delta: float) -> void:
 	# assigned target, so a closer imp in the path takes the hit.
 	var hit := _first_hit(prev, global_position)
 	if hit != null:
+		hit_enemy.emit()
 		hit.die(randi_range(BLOOD_MIN, BLOOD_MAX))
 		queue_free()
 

@@ -14,7 +14,7 @@ const TURN_SPEED := 18.0
 const FIRE_INTERVAL := 1.7
 const FLASH_ENERGY := 6.0      # peak muzzle-flash brightness
 const FLASH_DECAY := 40.0      # energy/sec falloff — a quick realistic pop
-const BARREL_TIP := Vector3(0.0, 0.02, -0.7)
+const BARREL_TIP := Vector3(0.0, 0.02, -0.34)   # muzzle of the pistol barrel
 
 # When held in a hand, the marine's body aims the gun (the WeaponRing locks its
 # orientation to the body's forward), so the gun skips its own yaw.
@@ -35,6 +35,12 @@ func set_target(t: Node3D) -> void:
 
 func clear_target() -> void:
 	_target = null
+
+
+## The imp this gun is currently aiming at (null if none). Used by the WeaponRing
+## to splay a held gun toward its own target.
+func get_target() -> Node3D:
+	return _target
 
 
 ## Offset the first shot so guns don't all fire on the same frame.
@@ -71,26 +77,35 @@ func _fire() -> void:
 
 
 func _build_body() -> void:
+	# A small pistol: a low slide, a stubby barrel out the -Z front, and a raked
+	# grip below. Roughly hand-sized so it sits naturally in the marine's grip.
 	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.18, 0.18, 0.20)
-	mat.metallic = 0.4
-	mat.roughness = 0.5
+	mat.albedo_color = Color(0.16, 0.16, 0.18)
+	mat.metallic = 0.5
+	mat.roughness = 0.45
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 
-	var body := MeshInstance3D.new()
-	body.mesh = MeshFactory.beveled_box(Vector3(0.18, 0.18, 0.5), 0.04)
-	body.material_override = mat
-	add_child(body)
+	var slide := MeshInstance3D.new()
+	slide.mesh = MeshFactory.beveled_box(Vector3(0.1, 0.12, 0.36), 0.03)
+	slide.material_override = mat
+	add_child(slide)
 
 	var barrel := MeshInstance3D.new()
-	barrel.mesh = MeshFactory.beveled_box(Vector3(0.08, 0.08, 0.42), 0.02)
+	barrel.mesh = MeshFactory.beveled_box(Vector3(0.07, 0.09, 0.18), 0.02)
 	barrel.material_override = mat
-	barrel.position = Vector3(0.0, 0.02, -0.42)   # sticks out the -Z front
+	barrel.position = Vector3(0.0, 0.02, -0.25)   # pokes out the -Z front
 	add_child(barrel)
+
+	var grip := MeshInstance3D.new()
+	grip.mesh = MeshFactory.beveled_box(Vector3(0.08, 0.22, 0.1), 0.025)
+	grip.material_override = mat
+	grip.position = Vector3(0.0, -0.15, 0.1)      # hangs down-back of the slide
+	grip.rotation.x = deg_to_rad(16.0)            # raked back like a real grip
+	add_child(grip)
 
 	_flash = OmniLight3D.new()
 	_flash.light_color = Color(1.0, 0.85, 0.55)   # warm gunfire light
 	_flash.light_energy = 0.0
-	_flash.omni_range = 4.5
+	_flash.omni_range = 3.5
 	_flash.position = BARREL_TIP
 	add_child(_flash)

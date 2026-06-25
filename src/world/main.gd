@@ -12,6 +12,8 @@ const MarineScript := preload("res://src/marine/marine.gd")
 const WaveSpawnerScript := preload("res://src/enemies/wave_spawner.gd")
 const WeaponRingScript := preload("res://src/weapons/weapon_ring.gd")
 const IndicatorsScript := preload("res://src/ui/offscreen_indicators.gd")
+const BattleMusicScript := preload("res://src/audio/battle_music.gd")
+const PauseMenuScript := preload("res://src/ui/pause_menu.gd")
 
 const CAM_OFFSET := Vector3(0.0, 13.0, 7.0)
 const CAM_SIZE := 18.0             # orthographic vertical extent (smaller = closer)
@@ -40,10 +42,16 @@ func _ready() -> void:
 	weapons.player = marine
 	add_child(weapons)
 
+	# Battle music — random track, quiet, fades out when no imps are alive.
+	add_child(BattleMusicScript.new())
+
 	# Screen-border markers for off-screen imps.
 	var ui := CanvasLayer.new()
 	ui.add_child(IndicatorsScript.new())
 	add_child(ui)
+
+	# ESC pause menu (Resume / Exit).
+	add_child(PauseMenuScript.new())
 
 	_build_camera()
 

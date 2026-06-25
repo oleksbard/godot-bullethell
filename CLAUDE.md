@@ -15,10 +15,14 @@ marine **auto-fires** its equipped weapons, and you collect loot between waves �
 The sibling `../godot-prototype` is the source of these conventions and the
 reused `src/lib/` utilities.
 
-**Status:** marine (WASD) on the hell island. It always turns to face the
-nearest imp (combat stance) while WASD strafes/backpedals — legs reverse their
-swing when moving backward. It holds two guns in its hands (bone-attached, aim
-locked to the body's forward); any extra guns float around it. Guns auto-fire
+**Status:** marine (WASD) on the hell island. It holds two pistols, one per hand;
+each whole arm swings (with a little lag) to aim at the nearest imp on *its* half
+(right hand → right side, left → left side, so the arms never cross), with the gun
+fixed in the hand so it never twists on its own. A hand with no imp on its side
+rests down. The body only turns *while moving*, toward the midpoint between its two
+targets, so it stays centred with the arms splayed evenly; WASD strafes/backpedals
+and the legs reverse their swing when moving backward. Guns 3–12 (if equipped)
+float around it and self-aim at the i-th closest, as before. Guns auto-fire
 bolts at the closest imps; imps spawn in doubling waves (15 → 30 → …), dying into
 gib chunks + blood decals; off-screen imps are flagged on the screen border. Next
 up: real gun/imp models, player health/damage. Specs: `docs/superpowers/specs/`.
@@ -88,19 +92,20 @@ main.tscn                  # composition-root scene -> src/world/main.gd
 src/
   world/   main.gd          # composition root: env, light, island, marine, waves, weapons, UI, camera
            hell_island.gd   # procedural charred-basalt island (IslandShape + ColorUtil)
-  marine/  marine.gd        # WASD move + face-nearest-imp; instances marine_01.glb, code walk, hand-bone gun mounts
+  marine/  marine.gd        # WASD move + face-nearest-imp; per-arm aim at own imp; marine_01.glb, code walk, hand grips
   enemies/ imp.gd           # "weak imp" placeholder enemy (group "imps"); drifts toward player
            wave_spawner.gd  # scatters a wave of imps across the island (wave 1 = 15)
-  weapons/ gun.gd           # placeholder gun; self-aims when floating (held guns are aimed by the body), fires bolts, muzzle flash
-           weapon_ring.gd   # first 2 guns held in the marine's hands, rest float; gun i targets the i-th closest imp
+  weapons/ gun.gd           # small pistol; self-aims when floating (held guns aimed by the ring), fires bolts, muzzle flash
+           weapon_ring.gd   # first 2 pistols fixed in the hands (marine aims via the arm), rest float; gun i targets i-th closest imp
   fx/      projectile.gd    # homing bolt; one-shot kills its target imp
            gib.gd           # a flying chunk of a blown-up imp (ballistic, settles, fades)
            gore.gd          # spawns the gib burst + blood decals on death
   ui/      offscreen_indicators.gd  # screen-border arrows pointing at off-screen imps
   audio/   shot_sfx.gd      # plays a random pistol clip per shot (pooled players)
+           impact_sfx.gd    # softer random thud when a bolt hits an imp (pooled; via Projectile.hit_enemy)
   lib/     mesh_factory.gd  color_util.gd  island_shape.gd   # reused from ../godot-prototype
 models/    marine_01.glb    # imported rigged marine (Mixamo-style bones, no baked anims)
-sound/     pistol_01..05.mp3  # shot samples (random per fire)
+sound/     pistol_01..05.mp3  impact_01..03.mp3  # shot + hit samples (random per event)
 test/      run_tests.gd     # headless test runner (+ run_tests.sh)
 docs/      guidelines/  ideas/hell-atmosphere.md  superpowers/specs/
 ```

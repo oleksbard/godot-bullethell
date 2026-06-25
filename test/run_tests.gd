@@ -15,6 +15,7 @@ const WeaponRingScript := preload("res://src/weapons/weapon_ring.gd")
 const ImpScript := preload("res://src/enemies/imp.gd")
 const ProjectileScript := preload("res://src/fx/projectile.gd")
 const ShotSfxScript := preload("res://src/audio/shot_sfx.gd")
+const ImpactSfxScript := preload("res://src/audio/impact_sfx.gd")
 
 var _passed := 0
 var _failed := 0
@@ -27,6 +28,7 @@ func _initialize() -> void:
 	_test_marine_clamp()
 	await _test_marine_model()
 	await _test_marine_faces_enemy()
+	await _test_hand_sides()
 	await _test_marine_backpedal()
 	await _test_wave_spawner()
 	await _test_weapon_ring()
@@ -34,10 +36,12 @@ func _initialize() -> void:
 	await _test_projectile_kills()
 	await _test_wave_progression()
 	await _test_gun_range()
+	_test_arm_splay()
 	await _test_imp_separation()
 	await _test_projectile_hits_path()
 	await _test_projectile_retargets()
 	await _test_shot_sfx()
+	await _test_impact_sfx()
 	print("──")
 	print("%d passed, %d failed" % [_passed, _failed])
 	quit(1 if _failed > 0 else 0)
@@ -91,18 +95,48 @@ func _test_marine_faces_enemy() -> void:
 	get_root().add_child(holder)
 	var m: Node3D = MarineScript.new()
 	holder.add_child(m)
-	var imp: Node3D = ImpScript.new()
-	holder.add_child(imp)
-	imp.global_position = Vector3(5.0, 0.0, 0.0)   # due +X of the marine, no WASD input
-	await process_frame                            # _ready: rig + imp joins the group
+	# One imp on each side, both ahead (-Z) — the body should face between them (-Z).
+	var a: Node3D = ImpScript.new()
+	holder.add_child(a)
+	a.global_position = Vector3(3.0, 0.0, -4.0)
+	var b: Node3D = ImpScript.new()
+	holder.add_child(b)
+	b.global_position = Vector3(-3.0, 0.0, -4.0)
+	await process_frame                            # _ready: rig + imps join the group
 
-	for i in 60:
-		m._process(0.05)                           # let the turn converge on the imp
-	var fwd := (-m.global_transform.basis.z)
-	var to_imp := imp.global_position - m.global_position
-	to_imp.y = 0.0
-	var dot := fwd.normalized().dot(to_imp.normalized())
-	_ok(dot > 0.95, "marine turns to face the nearest imp regardless of movement (dot %.2f)" % dot)
+	m._refresh_targets()
+	m._pick_hand_targets()
+	var yaw: float = m._body_facing_yaw(Vector3.ZERO)
+	var fwd := Vector3(-sin(yaw), 0.0, -cos(yaw))
+	var dot := fwd.dot(Vector3(0.0, 0.0, -1.0))
+	_ok(dot > 0.95, "body faces the midpoint between its two targets (dot %.2f)" % dot)
+	holder.free()
+
+
+func _test_hand_sides() -> void:
+	_suite = "Marine.hands"
+	var holder := Node3D.new()
+	get_root().add_child(holder)
+	var m: Node3D = MarineScript.new()
+	holder.add_child(m)                            # faces -Z (yaw 0): +X is its right
+	var r: Node3D = ImpScript.new()
+	holder.add_child(r)
+	r.global_position = Vector3(4.0, 0.0, 0.0)     # right half
+	var l: Node3D = ImpScript.new()
+	holder.add_child(l)
+	l.global_position = Vector3(-4.0, 0.0, 0.0)    # left half
+	await process_frame
+
+	m._refresh_targets()
+	m._pick_hand_targets()
+	_ok(m.get_hand_target(0) == r and m.get_hand_target(1) == l,
+		"right hand takes the right-half imp, left takes the left — no crossing")
+
+	# Move both imps to the right half: the left hand then has nothing (rests down).
+	l.global_position = Vector3(5.0, 0.0, 0.0)
+	m._refresh_targets()
+	m._pick_hand_targets()
+	_ok(m.get_hand_target(1) == null, "a hand with no imp on its side has no target (rests down)")
 	holder.free()
 
 
@@ -271,6 +305,21 @@ func _test_gun_range() -> void:
 	holder.free()
 
 
+func _test_arm_splay() -> void:
+	_suite = "Marine.splay"
+	# A small aim offset is followed exactly — the arm swings toward its target.
+	var within := MarineScript.splay_yaw(0.0, 0.3)
+	_ok(is_equal_approx(within, 0.3), "a small aim offset is followed (%.2f rad)" % within)
+	# An extreme aim is clamped so the arm doesn't over-rotate behind the body.
+	var far := MarineScript.splay_yaw(0.0, 2.9)   # near 180° to the side
+	_ok(is_equal_approx(far, MarineScript.ARM_SPLAY),
+		"an extreme aim clamps to ARM_SPLAY (%.2f rad)" % far)
+	# Symmetric the other way, and offset by a non-zero body yaw.
+	var neg := MarineScript.splay_yaw(1.0, 1.0 - 2.9)
+	_ok(is_equal_approx(neg, 1.0 - MarineScript.ARM_SPLAY),
+		"clamps symmetrically around the body yaw (%.2f rad)" % neg)
+
+
 func _test_imp_separation() -> void:
 	_suite = "Imp.separation"
 	var holder := Node3D.new()
@@ -360,6 +409,24 @@ func _test_shot_sfx() -> void:
 	# Evened volumes: the quietest clip (05) gets boosted well above the loudest (01).
 	_ok(s._volumes.size() == 5 and s._volumes[4] > s._volumes[0] + 10.0,
 		"per-clip trims even the levels (loud %.1f dB vs quiet %.1f dB)" % [s._volumes[0], s._volumes[4]])
+	s.play()                             # must not error even with no audio device
+	_ok(true, "play() runs without error")
+	s.free()
+
+
+func _test_impact_sfx() -> void:
+	_suite = "ImpactSfx"
+	var s: Node = ImpactSfxScript.new()
+	get_root().add_child(s)
+	await process_frame                  # _ready loads the clips + pool
+	var loaded: int = s._streams.size()
+	var all_valid: bool = loaded == 3
+	for st in s._streams:
+		if st == null:
+			all_valid = false
+	_ok(all_valid, "loads all 3 impact clips (got %d)" % loaded)
+	_ok(ImpactSfxScript.IMPACT_DB < ShotSfxScript.MASTER_DB,
+		"impact is quieter than the shot level (%.1f < %.1f dB)" % [ImpactSfxScript.IMPACT_DB, ShotSfxScript.MASTER_DB])
 	s.play()                             # must not error even with no audio device
 	_ok(true, "play() runs without error")
 	s.free()
