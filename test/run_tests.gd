@@ -13,7 +13,9 @@ const MarineScript := preload("res://src/marine/marine.gd")
 const WaveSpawnerScript := preload("res://src/enemies/wave_spawner.gd")
 const WeaponRingScript := preload("res://src/weapons/weapon_ring.gd")
 const ImpScript := preload("res://src/enemies/imp.gd")
+const PortalScript := preload("res://src/fx/portal.gd")
 const ProjectileScript := preload("res://src/fx/projectile.gd")
+const GunScript := preload("res://src/weapons/gun.gd")
 const ShotSfxScript := preload("res://src/audio/shot_sfx.gd")
 const ImpactSfxScript := preload("res://src/audio/impact_sfx.gd")
 
@@ -33,6 +35,10 @@ func _initialize() -> void:
 	await _test_wave_spawner()
 	await _test_weapon_ring()
 	await _test_imp_die()
+	await _test_imp_take_damage()
+	await _test_imp_hit_react()
+	await _test_imp_emerge()
+	await _test_portal_fail()
 	await _test_projectile_kills()
 	await _test_wave_progression()
 	await _test_gun_range()
@@ -172,11 +178,11 @@ func _test_wave_spawner() -> void:
 	var sp: Node3D = WaveSpawnerScript.new()
 	sp.player = Node3D.new()
 	get_root().add_child(sp.player)
-	get_root().add_child(sp)
-	await process_frame                       # _ready() spawns wave 1
+	get_root().add_child(sp)                  # _ready() starts dripping in wave 1
+	_pump_spawn(sp, 15)
 
 	var imps := get_nodes_in_group("imps")    # self is the SceneTree
-	_ok(imps.size() == 15, "wave 1 spawns 15 imps (got %d)" % imps.size())
+	_ok(imps.size() == 15, "wave 1 drips in to 15 imps (got %d)" % imps.size())
 
 	var all_inside := true
 	for imp in imps:
@@ -234,6 +240,59 @@ func _test_imp_die() -> void:
 	holder.free()                             # frees gibs + blood too
 
 
+func _test_imp_take_damage() -> void:
+	_suite = "Imp.take_damage"
+	var holder := Node3D.new()
+	get_root().add_child(holder)
+
+	# A tougher (later-wave) imp survives a hit it can't yet afford, then dies.
+	var imp: Node3D = ImpScript.new()
+	imp.max_hp = 6.0
+	imp.hp = 6.0
+	holder.add_child(imp)
+	await process_frame
+	var blood_before := get_nodes_in_group("blood").size()
+	imp.take_damage(GunScript.DAMAGE)             # one 5-dmg bolt — not enough vs 6 HP
+	_ok(get_nodes_in_group("imps").has(imp), "6-HP imp survives a single 5-dmg bolt")
+	_ok(get_nodes_in_group("blood").size() - blood_before == 1,
+		"a non-lethal hit leaves exactly 1 blood decal (%d new)" % (get_nodes_in_group("blood").size() - blood_before))
+	imp.take_damage(GunScript.DAMAGE)             # second bolt finishes it (10 >= 6)
+	_ok(get_nodes_in_group("imps").size() == 0, "second bolt drops it (HP <= 0 -> die)")
+
+	# A base-HP imp dies to one pistol bolt (dmg 5 >= BASE_HP 3).
+	var base: Node3D = ImpScript.new()
+	holder.add_child(base)
+	await process_frame
+	base.take_damage(GunScript.DAMAGE)
+	_ok(base.is_queued_for_deletion(),
+		"base imp (%d HP) dies to one pistol bolt (dmg %d)" % [int(ImpScript.BASE_HP), int(GunScript.DAMAGE)])
+
+	await process_frame
+	holder.free()
+
+
+func _test_imp_hit_react() -> void:
+	_suite = "Imp.hit"
+	var holder := Node3D.new()
+	get_root().add_child(holder)
+	var imp: Node3D = ImpScript.new()
+	imp.max_hp = 10.0
+	imp.hp = 10.0                                  # tough enough to survive the test hit
+	holder.add_child(imp)
+	await process_frame                            # _ready builds the model + _anim_mats
+	imp.global_position = Vector3(5.0, 0.0, 0.0)
+
+	imp.take_damage(2.0, 1, Vector3(1.0, 0.0, 0.0))   # non-lethal, bolt travelling +X
+	_ok(not imp._dead, "a non-lethal hit doesn't kill")
+	_ok(imp._knock.x > 0.1, "hit shoves the imp along the bolt's travel (knockback)")
+	_ok(imp._slow > 0.0 and imp._hit_flash > 0.0, "hit triggers a brief slow + flash")
+
+	for i in 20:
+		imp._update_hit_flash(0.05)                # ~1s later
+	_ok(imp._hit_flash == 0.0, "the hurt-flash decays back to zero")
+	holder.free()
+
+
 func _test_projectile_kills() -> void:
 	_suite = "Projectile"
 	var holder := Node3D.new()
@@ -265,17 +324,74 @@ func _test_wave_progression() -> void:
 	var sp: Node3D = WaveSpawnerScript.new()
 	sp.player = Node3D.new()
 	holder.add_child(sp.player)
-	holder.add_child(sp)
-	await process_frame                       # wave 1
-	_ok(get_nodes_in_group("imps").size() == 15, "wave 1 has 15 imps")
+	holder.add_child(sp)                      # _ready -> starts dripping in wave 1
+
+	_pump_spawn(sp, 15)
+	_ok(get_nodes_in_group("imps").size() == 15, "wave 1 drips in to 15 imps (got %d)" % get_nodes_in_group("imps").size())
+	var w1_interval: float = sp._spawn_interval
 
 	for imp in get_nodes_in_group("imps"):
-		imp.die()                             # die() leaves the group immediately
+		imp.die()                             # clear the field; die() leaves the group at once
 	sp._process(0.1)                          # notices the wave is clear -> starts the gap
-	sp._process(WaveSpawnerScript.WAVE_DELAY + 0.1) # gap elapses -> next wave
+	sp._process(WaveSpawnerScript.WAVE_DELAY + 0.1) # gap elapses -> next wave begins
+	_pump_spawn(sp, 30)
 	_ok(get_nodes_in_group("imps").size() == 30, "next wave doubles to 30 (got %d)" % get_nodes_in_group("imps").size())
+	_ok(sp._spawn_interval < w1_interval,
+		"wave 2 drips faster than wave 1 (%.2f < %.2f s)" % [sp._spawn_interval, w1_interval])
 
 	await process_frame
+	holder.free()
+
+
+## Step the spawner until it has dripped in `target` imps (each _process spawns
+## at most one, on the wave's interval).
+func _pump_spawn(sp: Node, target: int) -> void:
+	for i in 500:
+		if get_nodes_in_group("imps").size() >= target:
+			return
+		sp._process(0.2)
+
+
+func _test_imp_emerge() -> void:
+	_suite = "Imp.emerge"
+	var holder := Node3D.new()
+	get_root().add_child(holder)
+	var player := Node3D.new()
+	holder.add_child(player)                  # at origin
+	var imp: Node3D = ImpScript.new()
+	imp.player = player
+	holder.add_child(imp)
+	imp.global_position = Vector3(8.0, 0.0, 0.0)
+	imp.emerge(1.0)
+	await process_frame
+
+	var start := imp.global_position
+	for i in 10:
+		imp._process(0.05)                    # 0.5s elapsed (< emerge time) -> frozen
+	_ok(imp.global_position.distance_to(start) < 0.01, "imp stays put while in the portal")
+	_ok(imp.scale.x < 1.0, "imp is still scaling up mid-emerge (%.2f)" % imp.scale.x)
+
+	for i in 30:
+		imp._process(0.05)                    # past 1s -> emerged, free to hunt
+	_ok(imp.global_position.distance_to(start) > 0.5, "imp moves once it has emerged")
+	holder.free()
+
+
+func _test_portal_fail() -> void:
+	_suite = "Portal.fail"
+	var holder := Node3D.new()
+	get_root().add_child(holder)
+	var imp: Node3D = ImpScript.new()
+	holder.add_child(imp)
+	var portal: Node3D = PortalScript.new()
+	portal.imp = imp                          # set before add_child so _ready watches it
+	holder.add_child(portal)
+	await process_frame
+
+	_ok(not portal._failed, "portal is steady while its imp lives")
+	imp.free()                                # imp killed before it finished emerging
+	portal._process(0.05)
+	_ok(portal._failed, "portal fails when its imp dies while the portal is active")
 	holder.free()
 
 

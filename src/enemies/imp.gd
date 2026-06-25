@@ -1,27 +1,56 @@
 class_name Imp
 extends Node3D
-## A "weak imp" — placeholder enemy (real model added later). Super-simple
-## procedural body: a dark-red blob with glowing eyes. Drifts slowly toward the
-## player and registers in the "imps" group so weapons can target it and the
-## off-screen indicator can point at it.
+## A weak imp enemy: the optimized imp.glb model, walked + attacked entirely in a
+## vertex shader (no skeleton — see imp_anim.gdshader). It drifts toward the player,
+## and within ATTACK_RANGE plays a forward-jab attack pose (no damage yet). Registers
+## in the "imps" group so weapons can target it and the off-screen indicator finds it.
 
-const MeshFactory := preload("res://src/lib/mesh_factory.gd")
 const Gore := preload("res://src/fx/gore.gd")
+const MODEL: PackedScene = preload("res://models/imp_opt.glb")
+const ANIM_SHADER: Shader = preload("res://src/enemies/imp_anim.gdshader")
 
 const GROUP := "imps"
 const SPEED := 2.3           # drift toward the player (set 0 for static)
 const STOP_DIST := 0.8       # don't climb onto the player
 const SEP_RADIUS := 1.2      # personal space — push apart inside this
 const SEP_WEIGHT := 1.6      # how hard separation overrides the pull to the player
-const BODY_COLOR := Color(0.45, 0.08, 0.08)
+const BODY_COLOR := Color(0.45, 0.08, 0.08)   # blood/gib tint + albedo fallback if the model has no texture
+const EMERGE_SCALE_FROM := 0.2   # materializes up from this scale while in the portal
+const BASE_HP := 3.0             # wave-1 HP; one pistol bolt (dmg 5) one-shots it. Spawner scales it up per wave.
+
+# Model fitting + animation tuning (the glb's scale/orientation are unknown, so fit it).
+const IMP_HEIGHT := 1.3      # model auto-scaled so its height = this (world units)
+const MODEL_YAW := PI        # imp.glb faces +Z; PI turns it to face the player (-Z). jab dir follows.
+const ATTACK_RANGE := 1.4    # within this distance it plays the attack jab
+const ATTACK_SMOOTH := 6.0   # how fast it blends into / out of the attack pose
+const DEATH_TIME := 0.4      # how long the detached corpse takes to crumple + sink
+
+# Reaction to a hit that doesn't kill: a white flash, a shove back along the bolt,
+# and a brief slow.
+const HIT_FLASH_TIME := 0.12   # seconds of white hurt-flash
+const DEATH_FLASH := 0.22      # white pop as it dies (same glow as a hit), fading out
+const KNOCKBACK := 6.5         # initial shove speed (units/s) along the bolt's travel
+const KNOCKBACK_DAMP := 14.0   # how fast the shove decays
+const HIT_SLOW_TIME := 0.45    # seconds of reduced speed after a hit
+const HIT_SLOW_FACTOR := 0.45  # speed multiplier while slowed
 
 var player: Node3D
+var max_hp := BASE_HP
+var hp := BASE_HP                # set by the spawner per wave; depleted by take_damage()
 var _dead := false
+var _emerge := 0.0               # seconds left frozen in the spawn portal
+var _emerge_total := 0.0
+var _model: Node3D               # the instanced glb (detached as a corpse on death)
+var _anim_mats: Array[ShaderMaterial] = []   # per-mesh shader materials we drive (attack uniform)
+var _attack := 0.0               # 0 idle .. 1 attacking, smoothed
+var _hit_flash := 0.0            # seconds left of the white hurt-flash
+var _knock := Vector3.ZERO       # decaying knockback velocity from the last hit
+var _slow := 0.0                 # seconds left of the post-hit slow
 
 
 func _ready() -> void:
 	add_to_group(GROUP)
-	_build_body()
+	_build_model()
 
 
 ## Killed by a projectile: leave gore, drop out of the target group, vanish.
@@ -34,26 +63,119 @@ func die(blood_spatters: int = 3, hit_dir: Vector3 = Vector3.ZERO) -> void:
 	_dead = true
 	remove_from_group(GROUP)            # stop other guns/bolts targeting a corpse
 	Gore.spawn_death(get_parent(), global_position, BODY_COLOR, blood_spatters, hit_dir)
+	_spawn_corpse()                     # detach the body to crumple + sink on its own
 	queue_free()
 
 
+## Detach the model as an independent corpse that crumples (shader `death`) and sinks
+## into the ground, then frees itself — so the imp node can die instantly (group/logic)
+## while the body animates out. No-op if the rig/model is missing.
+func _spawn_corpse() -> void:
+	var parent := get_parent()
+	if _model == null or parent == null:
+		return
+	var corpse := _model
+	var mats := _anim_mats              # captured by the tween — does not touch this (freed) imp
+	corpse.reparent(parent)             # keeps world transform; survives our queue_free()
+	var set_death := func(v: float) -> void:
+		for m in mats:
+			m.set_shader_parameter("death", v)
+	var set_hit := func(v: float) -> void:        # same white glow as a non-lethal hit
+		for m in mats:
+			m.set_shader_parameter("hit", v)
+	var tw := corpse.create_tween().set_parallel(true)
+	tw.tween_method(set_death, 0.0, 1.0, DEATH_TIME)
+	tw.tween_method(set_hit, 1.0, 0.0, DEATH_FLASH)   # flash white on the killing blow, fading out
+	tw.tween_property(corpse, "position:y", corpse.position.y - IMP_HEIGHT, DEATH_TIME).set_ease(Tween.EASE_IN)
+	tw.chain().tween_callback(corpse.queue_free)
+
+
+## Take `amount` damage; dies (with gore) when HP reaches 0, else survives the hit.
+## blood_spatters/hit_dir are forwarded to the death spray only on the killing blow.
+func take_damage(amount: float, blood_spatters: int = 3, hit_dir: Vector3 = Vector3.ZERO) -> void:
+	if _dead:
+		return
+	hp -= amount
+	if hp <= 0.0:
+		die(blood_spatters, hit_dir)
+	else:
+		Gore.spawn_hit(get_parent(), global_position, BODY_COLOR, hit_dir)   # survived: 1 decal + flesh
+		_react_to_hit(hit_dir)
+
+
+## Survived a hit: flash white, get shoved back along the bolt, and slow briefly.
+func _react_to_hit(hit_dir: Vector3) -> void:
+	_hit_flash = HIT_FLASH_TIME
+	_slow = HIT_SLOW_TIME
+	var d := Vector3(hit_dir.x, 0.0, hit_dir.z)
+	if d.length() > 0.001:
+		_knock = d.normalized() * KNOCKBACK   # along travel = away from the shooter
+
+
+## Spawn frozen in a portal for `duration` seconds, scaling up as it materializes.
+## It won't move (or even turn) until fully emerged. Killable throughout.
+func emerge(duration: float) -> void:
+	_emerge = duration
+	_emerge_total = duration
+	scale = Vector3.ONE * EMERGE_SCALE_FROM
+
+
 func _process(delta: float) -> void:
-	if _dead or player == null:
+	if _dead:
+		return
+
+	_update_hit_flash(delta)             # visual only; runs even while emerging
+
+	# While materializing in the portal: scale up, hold still, don't steer.
+	if _emerge > 0.0:
+		_emerge -= delta
+		var p := 1.0 - clampf(_emerge / _emerge_total, 0.0, 1.0)   # 0 -> 1
+		scale = Vector3.ONE * lerpf(EMERGE_SCALE_FROM, 1.0, p)
+		if _emerge > 0.0:
+			return
+		scale = Vector3.ONE
+
+	if player == null:
 		return
 	var to_player := player.global_position - global_position
 	to_player.y = 0.0
 
 	# Steer toward the player, but pushed apart from nearby imps so they spread
-	# out instead of overlapping into one clump.
+	# out instead of overlapping into one clump. A recent hit slows the advance.
+	var spd := SPEED
+	if _slow > 0.0:
+		_slow -= delta
+		spd *= HIT_SLOW_FACTOR
 	var steer := Vector3.ZERO
 	if to_player.length() > STOP_DIST:
 		steer += to_player.normalized()
 	steer += _separation() * SEP_WEIGHT
 	if steer.length() > 0.001:
-		global_position += steer.normalized() * SPEED * delta
+		global_position += steer.normalized() * spd * delta
+
+	# Knockback shove from the last hit, decaying out.
+	if _knock.length() > 0.001:
+		global_position += _knock * delta
+		_knock = _knock.move_toward(Vector3.ZERO, KNOCKBACK_DAMP * delta)
 
 	if to_player.length() > 0.05:
 		rotation.y = atan2(-to_player.x, -to_player.z)   # always face the player (-Z forward)
+
+	# Attack pose in melee range (no damage yet — just the vertex-shader jab).
+	var want_attack := 1.0 if to_player.length() <= ATTACK_RANGE else 0.0
+	_attack = move_toward(_attack, want_attack, delta * ATTACK_SMOOTH)
+	for m in _anim_mats:
+		m.set_shader_parameter("attack", _attack)   # ponytail: per-imp uniform; becomes INSTANCE_CUSTOM under MultiMesh
+
+
+## Decay the white hurt-flash and push it to the shader (0 when not flashing).
+func _update_hit_flash(delta: float) -> void:
+	if _hit_flash <= 0.0:
+		return
+	_hit_flash = maxf(_hit_flash - delta, 0.0)
+	var f := _hit_flash / HIT_FLASH_TIME
+	for m in _anim_mats:
+		m.set_shader_parameter("hit", f)
 
 
 ## Sum of repulsion from imps inside SEP_RADIUS (stronger the closer they are).
@@ -72,27 +194,63 @@ func _separation() -> Vector3:
 	return push
 
 
-func _build_body() -> void:
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = BODY_COLOR
-	mat.roughness = 0.8
-	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	var body := MeshInstance3D.new()
-	body.mesh = MeshFactory.beveled_box(Vector3(0.7, 0.8, 0.6), 0.12)
-	body.material_override = mat
-	body.position.y = 0.5
-	add_child(body)
+## Instance the imp model, fit it to size/ground, and swap each mesh to the
+## walk/attack vertex shader (keeping its base-colour texture).
+func _build_model() -> void:
+	var model: Node3D = MODEL.instantiate()
+	add_child(model)
+	_fit_model(model)
+	_model = model
 
-	# Glowing eyes on the -Z front — pop against the hellish scene.
-	var eye_mat := StandardMaterial3D.new()
-	eye_mat.albedo_color = Color(1.0, 0.9, 0.2)
-	eye_mat.emission_enabled = true
-	eye_mat.emission = Color(1.0, 0.85, 0.15)
-	eye_mat.emission_energy_multiplier = 2.5
-	eye_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	for sx in [-0.16, 0.16]:
-		var eye := MeshInstance3D.new()
-		eye.mesh = MeshFactory.beveled_box(Vector3(0.12, 0.12, 0.08), 0.03)
-		eye.material_override = eye_mat
-		eye.position = Vector3(sx, 0.62, -0.31)
-		add_child(eye)
+	var fdir := Vector3(0.0, 0.0, -1.0).rotated(Vector3.UP, -MODEL_YAW)   # node-forward, in mesh-local space
+	for mi in model.find_children("*", "MeshInstance3D", true, false):
+		var mesh_inst := mi as MeshInstance3D
+		var tex := _albedo_of(mesh_inst)
+		var mat := ShaderMaterial.new()
+		mat.shader = ANIM_SHADER
+		mat.set_shader_parameter("albedo_tex", tex)
+		mat.set_shader_parameter("tint", Vector3(1.0, 1.0, 1.0) if tex != null
+			else Vector3(BODY_COLOR.r, BODY_COLOR.g, BODY_COLOR.b))
+		mat.set_shader_parameter("phase", randf() * TAU)
+		mat.set_shader_parameter("face_dir", fdir)
+		# Mesh-local foot/height so the shader's walk knows where legs vs torso are.
+		var a := mesh_inst.get_aabb()
+		mat.set_shader_parameter("local_min_y", a.position.y)
+		mat.set_shader_parameter("local_height", a.size.y)
+		mesh_inst.material_override = mat
+		_anim_mats.append(mat)
+
+
+## Scale the model so its height = IMP_HEIGHT and sit its base on the ground, so any
+## generated model (unknown scale) drops in right. Yaw by MODEL_YAW to face the player.
+func _fit_model(model: Node3D) -> void:
+	model.rotation.y = MODEL_YAW
+	var aabb := _merged_aabb(model)
+	if aabb.size.y > 0.001:
+		var s := IMP_HEIGHT / aabb.size.y
+		model.scale = Vector3(s, s, s)
+		model.position.y = -aabb.position.y * s   # min.y -> ground (Y-rotation doesn't change Y extent)
+
+
+## Combined AABB of the model's meshes, in the model's local space.
+func _merged_aabb(model: Node3D) -> AABB:
+	var inv := model.global_transform.affine_inverse()
+	var out := AABB()
+	var first := true
+	for mi in model.find_children("*", "MeshInstance3D", true, false):
+		var local := inv * (mi as MeshInstance3D).global_transform
+		var a := local * (mi as MeshInstance3D).get_aabb()
+		if first:
+			out = a
+			first = false
+		else:
+			out = out.merge(a)
+	return out
+
+
+## The mesh's base-colour texture (so the shader keeps the painted look), or null.
+func _albedo_of(mi: MeshInstance3D) -> Texture2D:
+	var m := mi.get_active_material(0)
+	if m is BaseMaterial3D:
+		return (m as BaseMaterial3D).albedo_texture
+	return null

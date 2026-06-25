@@ -17,7 +17,7 @@ static func build() -> Node3D:
 	rng.seed = 666
 	var seg := 60
 
-	var crust := Color(0.13, 0.10, 0.10)   # charred top crust
+	var crust := Color(0.27, 0.22, 0.20)   # charred top crust — bright enough to read after the ambient cut, so the rock grain shows
 	var rock_a := Color(0.20, 0.12, 0.11)  # warm dark basalt
 	var rock_b := Color(0.12, 0.08, 0.09)  # near-black rock
 
@@ -78,22 +78,22 @@ static func _rock_material() -> StandardMaterial3D:
 	noise.fractal_type = FastNoiseLite.FRACTAL_FBM
 	noise.fractal_octaves = 5
 	var ntex := NoiseTexture2D.new()
-	ntex.width = 512
-	ntex.height = 512
+	ntex.width = 1024          # bigger tile = the repeat grid ("squares") is far less obvious
+	ntex.height = 1024
 	ntex.seamless = true
 	ntex.as_normal_map = true
-	ntex.bump_strength = 1.8
+	ntex.bump_strength = 2.4   # was 1.8/3.2; deep enough to read, not so deep the tiling shouts
 	ntex.noise = noise
 
 	var m := StandardMaterial3D.new()
 	m.vertex_color_use_as_albedo = true
-	m.roughness = 0.97
+	m.roughness = 0.93   # was 0.86; raised back up so the ground stops glinting past the glow threshold and blooming
 	m.cull_mode = BaseMaterial3D.CULL_DISABLED
 	m.normal_enabled = true
 	m.normal_texture = ntex
-	m.normal_scale = 0.9
+	m.normal_scale = 1.7   # was 0.9/2.4; visible grain without screaming the tiling
 	m.uv1_triplanar = true
-	m.uv1_scale = Vector3(0.18, 0.18, 0.18)
+	m.uv1_scale = Vector3(0.10, 0.10, 0.10)   # bigger tile in world space -> fewer repeats on screen -> no "squares" grid
 	return m
 
 

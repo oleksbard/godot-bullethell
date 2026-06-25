@@ -17,7 +17,7 @@ const RADIUS := 0.8          # how far the floating guns sit from the player
 const HEIGHT := 1.0          # float height (~hand height)
 const BOB_AMP := 0.08
 const BOB_FREQ := 2.0
-const HELD_SEAT := 0.06      # seat the held gun a touch forward of the wrist along the barrel
+const HELD_SEAT := 0.17      # seat the held gun forward of the wrist, into the palm, along the barrel
 
 # Max targeting range in world units. ~12 ≈ 500px ≈ two-thirds of the screen
 # height (ortho size 18 over 720px ≈ 40px/unit). Imps farther than this are
@@ -113,12 +113,13 @@ func _assign_targets() -> void:
 
 ## A gun fired — spawn a bolt in world space (under our parent, the composition
 ## root) so it doesn't move with the ring.
-func _on_gun_fired(origin: Vector3, target: Node3D) -> void:
+func _on_gun_fired(origin: Vector3, target: Node3D, damage: float) -> void:
 	if not is_instance_valid(target):
 		return
 	_sfx.play()                          # random pistol shot per fire
 	var p: Node3D = ProjectileScript.new()
 	p.target = target
+	p.damage = damage
 	p.hit_enemy.connect(_impact.play)    # softer thud when this bolt connects
 	get_parent().add_child(p)
 	p.global_position = origin

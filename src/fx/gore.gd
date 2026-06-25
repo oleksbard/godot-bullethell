@@ -11,6 +11,7 @@ extends RefCounted
 const GibScript := preload("res://src/fx/gib.gd")
 
 const GIB_COUNT := 8
+const HIT_GIB_COUNT := 3        # smaller flesh burst when a hit doesn't kill
 const GIB_CONE := 0.8           # gibs fly in a ±0.8 rad cone around the bolt's travel
 const BLOOD_SPREAD := 1.9       # how far the splatter scatters from the death point
 const BLOOD_JITTER := 0.4       # ±rad each decal's spray varies off the travel axis
@@ -70,8 +71,28 @@ static func spawn_death(parent: Node, pos: Vector3, color: Color, blood_count: i
 	_spawn_blood(parent, pos, rng, blood_count, fwd)
 
 
-static func _spawn_gibs(parent: Node, pos: Vector3, color: Color, rng: RandomNumberGenerator, fwd: Vector3) -> void:
-	for i in GIB_COUNT:
+## Lighter feedback for a hit that does NOT kill: a small flesh burst + one blood
+## decal, sprayed forward along `hit_dir`. No central wound pool — that's a death cue.
+static func spawn_hit(parent: Node, pos: Vector3, color: Color, hit_dir: Vector3 = Vector3.ZERO) -> void:
+	var rng := RandomNumberGenerator.new()
+	rng.randomize()
+	var fwd := Vector3(hit_dir.x, 0.0, hit_dir.z)
+	if fwd.length() < 0.01:
+		var a := rng.randf_range(0.0, TAU)
+		fwd = Vector3(cos(a), 0.0, sin(a))
+	fwd = fwd.normalized()
+	_spawn_gibs(parent, pos, color, rng, fwd, HIT_GIB_COUNT)
+
+	# A single directional spray decal ahead of the impact (no pool on top).
+	var tex: Texture2D = load(BLOOD_TEXTURES[rng.randi_range(0, BLOOD_TEXTURES.size() - 1)])
+	var yaw := atan2(-fwd.x, -fwd.z) + DECAL_DIR_OFFSET + rng.randf_range(-BLOOD_JITTER, BLOOD_JITTER)
+	var off := fwd * rng.randf_range(0.0, 0.8)
+	_decal(parent, tex, pos + off, rng.randf_range(0.6, 1.2), yaw, 0.03, rng)
+	_trim_blood(parent)
+
+
+static func _spawn_gibs(parent: Node, pos: Vector3, color: Color, rng: RandomNumberGenerator, fwd: Vector3, count: int = GIB_COUNT) -> void:
+	for i in count:
 		var g := GibScript.new()
 		g.color = color
 		g.size = rng.randf_range(0.12, 0.26)

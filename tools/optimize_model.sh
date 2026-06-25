@@ -28,10 +28,11 @@ gt() { npx --yes @gltf-transform/cli "$@"; }
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-echo "=> $preset: keep ${ratio} of tris (err ${error}), texture ${tex}px, webp+draco"
+echo "=> $preset: keep ${ratio} of tris (err ${error}), texture ${tex}px, webp"
 gt simplify "$in"        "$tmp/1.glb" --ratio "$ratio" --error "$error"   # auto-welds first
 gt resize   "$tmp/1.glb" "$tmp/2.glb" --width "$tex" --height "$tex"
-gt webp     "$tmp/2.glb" "$tmp/3.glb"   # ponytail: converts ALL textures; if a normal/roughness map looks blotchy, restrict with --slots '{baseColor,emissive}'
-gt draco    "$tmp/3.glb" "$out"
+# webp textures only — NO draco/meshopt geometry compression: Godot 4.7 can't import
+# KHR_draco_mesh_compression without a plugin. Geometry is tiny after simplify anyway.
+gt webp     "$tmp/2.glb" "$out"   # ponytail: converts ALL textures; if a normal/roughness map looks blotchy, restrict with --slots '{baseColor,emissive}'
 
 echo "=> wrote $out  (run tools/inspect_model.sh '$out' to check the result)"

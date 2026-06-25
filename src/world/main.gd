@@ -16,6 +16,7 @@ const BattleMusicScript := preload("res://src/audio/battle_music.gd")
 const PauseMenuScript := preload("res://src/ui/pause_menu.gd")
 const PlayerStatsScript := preload("res://src/marine/player_stats.gd")
 const HudScript := preload("res://src/ui/hud.gd")
+const ScreenGradeScript := preload("res://src/fx/screen_grade.gd")
 
 const CAM_OFFSET := Vector3(0.0, 13.0, 7.0)
 const CAM_SIZE := 18.0             # orthographic vertical extent (smaller = closer)
@@ -52,6 +53,10 @@ func _ready() -> void:
 	# Battle music — random track, quiet, fades out when no imps are alive.
 	add_child(BattleMusicScript.new())
 
+	# Screen-space "video filter" grade (sharpen + clarity + saturation), on layer 0
+	# so it grades the 3D scene only — the UI below draws on top, ungraded.
+	add_child(ScreenGradeScript.new())
+
 	# Screen-border markers for off-screen imps.
 	var ui := CanvasLayer.new()
 	ui.add_child(IndicatorsScript.new())
@@ -73,8 +78,8 @@ func _build_environment() -> void:
 	env.background_mode = Environment.BG_COLOR
 	env.background_color = Color(0.03, 0.01, 0.015)        # near-black void, faint red
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.ambient_light_color = Color(0.55, 0.22, 0.12)      # ember fill
-	env.ambient_light_energy = 1.15
+	env.ambient_light_color = Color(0.50, 0.27, 0.20)      # ember fill — less pure-red so it doesn't wash everything red
+	env.ambient_light_energy = 0.85                        # was 1.15; lowered so the key light still cuts shadow contrast into the ground, but not so low it goes too dark
 
 	# Tone mapping + exposure — the biggest "feel" lever.
 	env.tonemap_mode = Environment.TONE_MAPPER_ACES
@@ -91,7 +96,7 @@ func _build_environment() -> void:
 	env.glow_strength = 1.05
 	env.glow_bloom = 0.2
 	env.glow_blend_mode = Environment.GLOW_BLEND_MODE_ADDITIVE
-	env.glow_hdr_threshold = 0.9
+	env.glow_hdr_threshold = 1.15   # was 0.9; only the emissive ember rocks bloom now, not the lit ground
 	env.set_glow_level(3, 1.0)
 	env.set_glow_level(4, 1.0)
 	env.set_glow_level(5, 1.0)
@@ -110,7 +115,7 @@ func _build_key_light() -> void:
 	# Low, warm key raking across the island like firelight out of the void.
 	var key := DirectionalLight3D.new()
 	key.light_color = Color(1.0, 0.5, 0.25)
-	key.light_energy = 1.8
+	key.light_energy = 2.2   # raking warm key; strong enough to carve the stone grain's micro-shadows
 	key.rotation = Vector3(deg_to_rad(-22.0), deg_to_rad(35.0), 0.0)
 	key.shadow_enabled = true
 	add_child(key)

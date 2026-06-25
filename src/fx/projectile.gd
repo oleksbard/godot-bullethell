@@ -3,13 +3,13 @@ extends Node3D
 ## A glowing bolt fired by a gun. It aims once — at its target's position the
 ## instant it spawns — then flies in a straight line. It does NOT home or
 ## retarget: if the imp moves out of the way, the bolt misses. Along that
-## straight path it kills the first imp it actually crosses (swept), so a closer
+## straight path it damages the first imp it actually crosses (swept), so a closer
 ## imp that wanders into the line still takes the hit. Expires after LIFETIME.
 
 const MeshFactory := preload("res://src/lib/mesh_factory.gd")
 const ImpScript := preload("res://src/enemies/imp.gd")
 
-signal hit_enemy            # emitted when this bolt kills an imp (drives the impact SFX)
+signal hit_enemy            # emitted when this bolt hits an imp (drives the impact SFX)
 
 const SPEED := 38.25        # 15% slower than the original 45
 const HIT_DIST := 0.7
@@ -22,6 +22,7 @@ const BLOOD_MIN := 1
 const BLOOD_MAX := 4
 
 var target: Node3D
+var damage := 5.0           # set by the WeaponRing from the firing gun's DAMAGE
 var _dir := Vector3.ZERO
 var _life := 0.0
 
@@ -55,7 +56,7 @@ func _process(delta: float) -> void:
 	var hit := _first_hit(prev, global_position)
 	if hit != null:
 		hit_enemy.emit()
-		hit.die(randi_range(BLOOD_MIN, BLOOD_MAX), _dir)   # pass travel dir: blood + gibs spray forward
+		hit.take_damage(damage, randi_range(BLOOD_MIN, BLOOD_MAX), _dir)   # dir: blood + gibs spray forward on the kill
 		queue_free()
 
 

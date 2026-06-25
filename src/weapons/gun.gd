@@ -8,10 +8,11 @@ extends Node3D
 
 const MeshFactory := preload("res://src/lib/mesh_factory.gd")
 
-signal fired(origin: Vector3, target: Node3D)
+signal fired(origin: Vector3, target: Node3D, damage: float)
 
 const TURN_SPEED := 18.0
 const FIRE_INTERVAL := 1.7
+const DAMAGE := 5.0            # base pistol damage per bolt (marine power is fixed — no upgrades yet)
 const FLASH_ENERGY := 6.0      # peak muzzle-flash brightness
 const FLASH_DECAY := 40.0      # energy/sec falloff — a quick realistic pop
 const FLASH_SIZE := 0.55       # muzzle-flash sprite size (world units)
@@ -83,7 +84,7 @@ func _fire() -> void:
 	_flash.light_energy = FLASH_ENERGY
 	_flash_quad.scale = Vector3.ONE * randf_range(0.85, 1.3)   # vary so shots don't look identical
 	_flash_quad.visible = true
-	fired.emit(to_global(BARREL_TIP), _target)
+	fired.emit(to_global(BARREL_TIP), _target, DAMAGE)
 
 
 func _build_body() -> void:

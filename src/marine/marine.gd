@@ -45,6 +45,8 @@ const ARM_REST_FWD := 0.2           # idle arms hang down + a little forward
 const ARM_REST_OUT := 0.12          # ...and splayed a little outward
 const RIGHT_SIDE := -1.0            # right hand covers the dev<0 half-sphere (verified by render)
 const LEFT_SIDE := 1.0              # left hand covers the dev>0 half-sphere
+const GRIP_ROLL := deg_to_rad(0.0)   # spare: roll the held pistol about its barrel (0 = none)
+const GRIP_YAW := deg_to_rad(0.0)  # flip the held pistol about its vertical axis so the muzzle points at the enemy, not back at the marine
 const BOB_HEIGHT := 0.06
 
 var current_velocity := Vector3.ZERO
@@ -361,6 +363,10 @@ func _make_hand_mount(hand_name: String, arm_bone: int) -> void:
 	var x_axis := up_hint.cross(z_axis).normalized()
 	var y_axis := z_axis.cross(x_axis).normalized()
 	var desired := Basis(x_axis, y_axis, z_axis)
+	# Roll about the barrel so the pistol's top faces up, and turn it about its
+	# vertical axis so it points the right way.
+	desired = desired * Basis(Vector3(0.0, 0.0, 1.0), GRIP_ROLL)
+	desired = desired * Basis(Vector3(0.0, 1.0, 0.0), GRIP_YAW)
 	var grip_local := _skel.get_bone_global_rest(hand_bi).basis.inverse() * desired
 
 	var att := BoneAttachment3D.new()
