@@ -9,7 +9,7 @@ const MeshFactory := preload("res://src/lib/mesh_factory.gd")
 const Gore := preload("res://src/fx/gore.gd")
 
 const GROUP := "imps"
-const SPEED := 1.6           # drift toward the player (set 0 for static)
+const SPEED := 2.3           # drift toward the player (set 0 for static)
 const STOP_DIST := 0.8       # don't climb onto the player
 const SEP_RADIUS := 1.2      # personal space — push apart inside this
 const SEP_WEIGHT := 1.6      # how hard separation overrides the pull to the player
@@ -25,12 +25,14 @@ func _ready() -> void:
 
 
 ## Killed by a projectile: leave gore, drop out of the target group, vanish.
-func die() -> void:
+## `blood_spatters` is set by the killing projectile (its type decides how gory);
+## the default covers non-combat clears (e.g. wiping a wave).
+func die(blood_spatters: int = 3) -> void:
 	if _dead:
 		return                          # guard: two bolts can land the same frame
 	_dead = true
 	remove_from_group(GROUP)            # stop other guns/bolts targeting a corpse
-	Gore.spawn_death(get_parent(), global_position, BODY_COLOR)
+	Gore.spawn_death(get_parent(), global_position, BODY_COLOR, blood_spatters)
 	queue_free()
 
 

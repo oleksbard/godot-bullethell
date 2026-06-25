@@ -1,19 +1,21 @@
 class_name WeaponRing
 extends Node3D
-## The player's guns, floating in fixed slots around them (Brotato-style). Tracks
-## the player's *position* (not rotation, so guns don't spin when the marine
-## turns), bobs them gently, and each frame aims the i-th gun at the i-th closest
-## imp. No firing yet — aiming only.
+## The player's guns. The first two are *held*: parented to the marine's hand
+## bones so they sit in its grip, with their aim locked to the body's forward
+## (the marine faces the nearest imp, so the held guns point at it). Any guns
+## beyond the hands float in fixed slots around the player (Brotato-style) and
+## aim themselves. Each frame the i-th gun targets the i-th closest imp.
 
 const GunScript := preload("res://src/weapons/gun.gd")
 const ImpScript := preload("res://src/enemies/imp.gd")
 const ProjectileScript := preload("res://src/fx/projectile.gd")
 const ShotSfxScript := preload("res://src/audio/shot_sfx.gd")
 
-const RADIUS := 0.8          # how far the guns float from the player (close — almost in hand)
+const RADIUS := 0.8          # how far the floating guns sit from the player
 const HEIGHT := 1.0          # float height (~hand height)
 const BOB_AMP := 0.08
 const BOB_FREQ := 2.0
+const GRIP_FWD := 0.18       # push held guns forward of the wrist so the barrel clears the fist
 
 # Max targeting range in world units. ~12 ≈ 500px ≈ two-thirds of the screen
 # height (ortho size 18 over 720px ≈ 40px/unit). Imps farther than this are
@@ -24,6 +26,7 @@ const MAX_RANGE := 12.0
 
 var player: Node3D
 var _guns: Array[Node3D] = []
+var _mounts: Array = []      # per-gun hand mount (Node3D) or null if it floats
 var _bob := 0.0
 var _sfx: Node
 
@@ -32,13 +35,25 @@ func _ready() -> void:
 	_sfx = ShotSfxScript.new()
 	add_child(_sfx)
 
+	# Held guns go in the marine's hands; the rest float. A non-marine player
+	# (e.g. tests) exposes no hands, so every gun floats.
+	var hands: Array = []
+	if player != null and player.has_method("get_hand_mounts"):
+		hands = player.get_hand_mounts()
+
 	gun_count = clampi(gun_count, 1, 12)
 	for i in gun_count:
 		var g: Node3D = GunScript.new()
 		g.fired.connect(_on_gun_fired)
-		add_child(g)
 		# Stagger first shots so the guns fire individually, not in lockstep.
 		g.stagger(GunScript.FIRE_INTERVAL * float(i) / float(gun_count))
+		if i < hands.size():
+			g.held = true
+			(hands[i] as Node3D).add_child(g)     # ride the hand bone
+			_mounts.append(hands[i])
+		else:
+			add_child(g)
+			_mounts.append(null)
 		_guns.append(g)
 
 
@@ -47,10 +62,27 @@ func _process(delta: float) -> void:
 		return
 	global_position = player.global_position     # follow position, ignore rotation
 	_bob += delta * BOB_FREQ
+
+	# Held guns are pinned to the hand and oriented to the body's forward (so they
+	# aim wherever the marine faces). Floating guns sit in a ring and self-aim.
+	var float_total := 0
+	for m in _mounts:
+		if m == null:
+			float_total += 1
+	var body := player.global_transform.basis.orthonormalized()
+	var fwd := -body.z
+	var float_i := 0
 	for i in _guns.size():
-		var ang := TAU * float(i) / float(_guns.size())
-		var y := HEIGHT + sin(_bob + float(i)) * BOB_AMP
-		_guns[i].position = Vector3(cos(ang) * RADIUS, y, sin(ang) * RADIUS)
+		if _mounts[i] != null:
+			var t := _guns[i].global_transform
+			t.basis = body
+			t.origin = (_mounts[i] as Node3D).global_position + fwd * GRIP_FWD
+			_guns[i].global_transform = t
+		else:
+			var ang := TAU * float(float_i) / float(maxi(float_total, 1))
+			var y := HEIGHT + sin(_bob + float(i)) * BOB_AMP
+			_guns[i].position = Vector3(cos(ang) * RADIUS, y, sin(ang) * RADIUS)
+			float_i += 1
 	_assign_targets()
 
 

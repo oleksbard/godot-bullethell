@@ -26,6 +26,8 @@ func _initialize() -> void:
 	_test_island_shape()
 	_test_marine_clamp()
 	await _test_marine_model()
+	await _test_marine_faces_enemy()
+	await _test_marine_backpedal()
 	await _test_wave_spawner()
 	await _test_weapon_ring()
 	await _test_imp_die()
@@ -79,6 +81,55 @@ func _test_marine_model() -> void:
 	_ok(m._skel != null, "instances a Skeleton3D from marine_01.glb")
 	_ok(m._b_lup != -1 and m._b_rup != -1 and m._b_larm != -1 and m._b_rarm != -1,
 		"resolves the walk bones (LeftUpLeg/RightUpLeg/LeftArm/RightArm)")
+	_ok(m.get_hand_mounts().size() == 2, "attaches both hand mounts for held guns (got %d)" % m.get_hand_mounts().size())
+	m.free()
+
+
+func _test_marine_faces_enemy() -> void:
+	_suite = "Marine.facing"
+	var holder := Node3D.new()
+	get_root().add_child(holder)
+	var m: Node3D = MarineScript.new()
+	holder.add_child(m)
+	var imp: Node3D = ImpScript.new()
+	holder.add_child(imp)
+	imp.global_position = Vector3(5.0, 0.0, 0.0)   # due +X of the marine, no WASD input
+	await process_frame                            # _ready: rig + imp joins the group
+
+	for i in 60:
+		m._process(0.05)                           # let the turn converge on the imp
+	var fwd := (-m.global_transform.basis.z)
+	var to_imp := imp.global_position - m.global_position
+	to_imp.y = 0.0
+	var dot := fwd.normalized().dot(to_imp.normalized())
+	_ok(dot > 0.95, "marine turns to face the nearest imp regardless of movement (dot %.2f)" % dot)
+	holder.free()
+
+
+func _test_marine_backpedal() -> void:
+	_suite = "Marine.backpedal"
+	var m: Node3D = MarineScript.new()
+	get_root().add_child(m)
+	await process_frame
+	if m._skel == null or m._b_lup == -1:
+		_ok(false, "rig present for backpedal test")
+		m.free()
+		return
+
+	m.rotation.y = -PI / 2.0          # forward (-Z) now points +X
+	m._walk_amt = 1.0
+	m._walk_phase = PI / 2.0          # sin = 1 -> max, deterministic swing
+
+	m.current_velocity = Vector3(6.0, 0.0, 0.0)     # moving +X == forward
+	m._animate_walk(0.0)                             # delta 0: don't advance the phase
+	var fwd_pose: Quaternion = m._skel.get_bone_pose_rotation(m._b_lup)
+
+	m._walk_phase = PI / 2.0
+	m.current_velocity = Vector3(-6.0, 0.0, 0.0)    # moving -X == backpedal
+	m._animate_walk(0.0)
+	var back_pose: Quaternion = m._skel.get_bone_pose_rotation(m._b_lup)
+
+	_ok(not fwd_pose.is_equal_approx(back_pose), "leg swing reverses when backpedaling vs advancing")
 	m.free()
 
 
@@ -139,9 +190,11 @@ func _test_imp_die() -> void:
 	await process_frame
 	_ok(get_nodes_in_group("imps").has(imp), "imp registers in the 'imps' group")
 
-	imp.die()
+	var blood_before := get_nodes_in_group("blood").size()
+	imp.die(4)                                # killer passes the blood amount (projectile type)
 	_ok(get_nodes_in_group("imps").size() == 0, "die() removes it from the target group")
-	_ok(get_nodes_in_group("blood").size() >= 10, "die() leaves a lot of blood (%d decals)" % get_nodes_in_group("blood").size())
+	_ok(get_nodes_in_group("blood").size() - blood_before == 4,
+		"die(n) spawns exactly n blood spatters (%d new)" % (get_nodes_in_group("blood").size() - blood_before))
 	await process_frame                       # let the queued free run
 	holder.free()                             # frees gibs + blood too
 

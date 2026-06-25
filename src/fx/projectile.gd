@@ -13,6 +13,11 @@ const HIT_DIST := 0.7
 const LIFETIME := 2.0
 const AIM_HEIGHT := 0.6     # aim at the imp's mass, not its feet
 
+# Blood this projectile type leaves per kill (rolled per hit). The basic bolt is
+# weak — a light spatter. Heavier weapons set a bigger range.
+const BLOOD_MIN := 1
+const BLOOD_MAX := 4
+
 var target: Node3D
 var _dir := Vector3.ZERO
 var _life := 0.0
@@ -44,7 +49,7 @@ func _process(delta: float) -> void:
 	# assigned target, so a closer imp in the path takes the hit.
 	var hit := _first_hit(prev, global_position)
 	if hit != null:
-		hit.die()
+		hit.die(randi_range(BLOOD_MIN, BLOOD_MAX))
 		queue_free()
 
 

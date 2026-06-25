@@ -16,6 +16,10 @@ const FLASH_ENERGY := 6.0      # peak muzzle-flash brightness
 const FLASH_DECAY := 40.0      # energy/sec falloff — a quick realistic pop
 const BARREL_TIP := Vector3(0.0, 0.02, -0.7)
 
+# When held in a hand, the marine's body aims the gun (the WeaponRing locks its
+# orientation to the body's forward), so the gun skips its own yaw.
+var held := false
+
 var _target: Node3D
 var _cooldown := 0.0
 var _flash: OmniLight3D
@@ -39,14 +43,16 @@ func stagger(t: float) -> void:
 
 
 func _process(delta: float) -> void:
-	# Aim: yaw the barrel (-Z) toward the target.
-	var want_yaw := rotation.y
-	if is_instance_valid(_target):
-		var to := _target.global_position - global_position
-		to.y = 0.0
-		if to.length() > 0.01:
-			want_yaw = atan2(-to.x, -to.z)
-	rotation.y = lerp_angle(rotation.y, want_yaw, clampf(delta * TURN_SPEED, 0.0, 1.0))
+	# Floating guns yaw their own barrel (-Z) toward the target; held guns are
+	# aimed by the marine's body, so the WeaponRing sets their transform instead.
+	if not held:
+		var want_yaw := rotation.y
+		if is_instance_valid(_target):
+			var to := _target.global_position - global_position
+			to.y = 0.0
+			if to.length() > 0.01:
+				want_yaw = atan2(-to.x, -to.z)
+		rotation.y = lerp_angle(rotation.y, want_yaw, clampf(delta * TURN_SPEED, 0.0, 1.0))
 
 	# Fire on cooldown when there's something to shoot.
 	_cooldown -= delta

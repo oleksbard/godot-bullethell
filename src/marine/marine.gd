@@ -1,20 +1,25 @@
 class_name Marine
 extends Node3D
-## The marine's controller: WASD movement, facing, a walk cycle, and a clamp to
-## the hell island's coastline. The body is the imported rigged model
+## The marine's controller: WASD movement, combat facing, a walk cycle, and a
+## clamp to the hell island's coastline. The body is the imported rigged model
 ## (models/marine_01.glb); this script instances it and drives its skeleton.
+##
+## Facing is decoupled from movement: the marine always turns to face the nearest
+## imp (combat stance) while WASD still moves it in screen space — so it can
+## strafe or backpedal while keeping the guns on the threat. The legs reverse
+## their swing when moving backward relative to facing, so it reads as a
+## backpedal rather than a moonwalk.
 ##
 ## The glb is rigged in a T-pose (arms straight out) with no real animations, so
 ## the pose is authored here:
 ##   * Legs swing front/back about their local X relative to rest.
-##   * Arms are *aimed* at a target direction (down + slightly out, plus a
-##     forward/back reach while walking) — direction-aiming is axis-independent,
-##     so "how far the hands sit from the body" is one intuitive knob (ARM_OUT)
-##     instead of a guessed rotation axis.
+##   * Arms are *aimed* forward into a two-handed "hold" so the hand bones sit out
+##     front — the guns are bone-attached there (see get_hand_mounts()).
 ## Movement/turning happen on this root; the bob moves the *model's* local Y so
 ## the camera-followed root never shakes.
 
 const IslandShape := preload("res://src/lib/island_shape.gd")
+const ImpScript := preload("res://src/enemies/imp.gd")
 const MODEL: PackedScene = preload("res://models/marine_01.glb")
 
 const SPEED := 6.0
@@ -26,11 +31,13 @@ const EDGE_MARGIN := 1.0
 const MODEL_YAW := PI
 const MODEL_Y_OFFSET := 0.0
 
-# Walk + rest pose.
+# Walk + hold pose.
 const WALK_FREQ := 9.0
 const LEG_SWING := 0.6      # leg front/back swing (radians) at full speed
-const ARM_OUT := 0.32       # how far the hands sit out from the torso (bigger = looser)
-const ARM_SWING := 0.30     # forward/back arm reach added while walking
+const ARM_OUT := 0.22       # sideways spread of the held hands
+const ARM_DOWN := 0.45      # how far the held hands drop below the shoulders
+const ARM_FWD := 0.9        # forward reach of the two-handed hold (dominant axis)
+const ARM_SWING := 0.12     # subtle forward/back hand sway while walking
 const BOB_HEIGHT := 0.06
 
 var current_velocity := Vector3.ZERO
@@ -43,6 +50,7 @@ var _b_larm := -1     # LeftArm
 var _b_rarm := -1     # RightArm
 var _rest := {}       # leg bone idx -> rest rotation Quaternion
 var _arm := {}        # arm bone idx -> aim data {pinv: Basis, rb: Basis, dir: Vector3}
+var _hand_mounts: Array[Node3D] = []   # BoneAttachment3D at the hands (guns hang here)
 var _walk_phase := 0.0
 var _walk_amt := 0.0
 
@@ -73,6 +81,18 @@ func _ready() -> void:
 	_b_larm = _cache_arm("LeftArm", "LeftForeArm")
 	_b_rarm = _cache_arm("RightArm", "RightForeArm")
 
+	# Bone-attached mounts at the hands; the WeaponRing parents the held guns here
+	# so they ride the arms. Order is [right, left] to match gun slot order.
+	_make_hand_mount("RightHand")
+	_make_hand_mount("LeftHand")
+
+
+## Bone-attached points at the hands, in [right, left] order. The WeaponRing's
+## first guns parent here so they sit in the marine's grip. Empty if the rig has
+## no hands (animation degrades to floating guns).
+func get_hand_mounts() -> Array[Node3D]:
+	return _hand_mounts
+
 
 func _process(delta: float) -> void:
 	_handle_movement(delta)
@@ -93,13 +113,37 @@ func _handle_movement(delta: float) -> void:
 	var move := Vector3.ZERO
 	if dir != Vector2.ZERO:
 		dir = dir.normalized()
-		move = Vector3(dir.x, 0.0, dir.y)         # screen-aligned: W = away from camera
-		var target_yaw := atan2(-move.x, -move.z)  # Godot forward is -Z
-		rotation.y = lerp_angle(rotation.y, target_yaw, clampf(delta * TURN_SPEED, 0.0, 1.0))
+		move = Vector3(dir.x, 0.0, dir.y)          # screen-aligned: W = away from camera
 
-	current_velocity = move * SPEED
+	# Face the nearest imp (combat stance), independent of where we're moving.
+	# Fall back to facing the movement direction when no imps are around.
+	var enemy_dir := _nearest_enemy_dir()
+	var target_yaw := rotation.y
+	if enemy_dir != Vector3.ZERO:
+		target_yaw = atan2(-enemy_dir.x, -enemy_dir.z)   # Godot forward is -Z
+	elif move != Vector3.ZERO:
+		target_yaw = atan2(-move.x, -move.z)
+	rotation.y = lerp_angle(rotation.y, target_yaw, clampf(delta * TURN_SPEED, 0.0, 1.0))
+
+	current_velocity = move * SPEED                 # world-space, decoupled from facing
 	position += current_velocity * delta
 	_clamp_to_island()
+
+
+## Horizontal vector to the closest live imp (ZERO if none). Used for facing.
+func _nearest_enemy_dir() -> Vector3:
+	var best := Vector3.ZERO
+	var best_d := INF
+	for imp in get_tree().get_nodes_in_group(ImpScript.GROUP):
+		if not is_instance_valid(imp):
+			continue
+		var to: Vector3 = (imp as Node3D).global_position - global_position
+		to.y = 0.0
+		var d := to.length_squared()
+		if d > 0.0001 and d < best_d:
+			best_d = d
+			best = to
+	return best
 
 
 ## Keep the marine inside the coastline so it can't walk off into the void.
@@ -124,10 +168,20 @@ func _animate_walk(delta: float) -> void:
 		_walk_phase += delta * WALK_FREQ
 	if _skel == null:
 		return
+
+	# Reverse the leg swing when moving backward relative to facing, so a
+	# backpedal reads as one instead of a forward strut. Strafe (~perpendicular)
+	# keeps the forward sign — it just looks like a sideways shuffle.
+	var dir_sign := 1.0
+	if current_velocity.length() > 0.05:
+		var fb := current_velocity.normalized().dot(-global_transform.basis.z)
+		if fb < -0.05:
+			dir_sign = -1.0
+
 	var s := sin(_walk_phase) * _walk_amt
-	_swing_bone(_b_lup, s * LEG_SWING)     # legs swing opposite each other
-	_swing_bone(_b_rup, -s * LEG_SWING)
-	_aim_arm(_b_larm, 1.0, -s)             # arms hang out to the sides, reach to counter the legs
+	_swing_bone(_b_lup, s * LEG_SWING * dir_sign)     # legs swing opposite each other
+	_swing_bone(_b_rup, -s * LEG_SWING * dir_sign)
+	_aim_arm(_b_larm, 1.0, -s)              # two-handed forward hold, slight sway with the walk
 	_aim_arm(_b_rarm, -1.0, s)
 	_model.position.y = MODEL_Y_OFFSET + absf(sin(_walk_phase)) * BOB_HEIGHT * _walk_amt
 
@@ -159,18 +213,33 @@ func _cache_arm(bone_name: String, child_name: String) -> int:
 	return b
 
 
-## Aim an upper arm so it points down + out (`side` = +1 left / -1 right), with a
-## forward/back `reach` (-1..1) folded in for the walk swing. Skeleton space: the
-## character's front is +Z, left is +X, down is -Y.
+## Aim an upper arm into the two-handed forward hold (`side` = +1 left / -1
+## right), with a forward/back `reach` (-1..1) folded in for the walk sway.
+## Skeleton space: the character's front is +Z, left is +X, down is -Y, so the
+## hold points mostly +Z (forward) and a little -Y (down).
 func _aim_arm(b: int, side: float, reach: float) -> void:
 	if not _arm.has(b):
 		return
 	var d: Dictionary = _arm[b]
-	var target := Vector3(side * ARM_OUT, -1.0, reach * ARM_SWING).normalized()
+	var target := Vector3(side * ARM_OUT, -ARM_DOWN, ARM_FWD + reach * ARM_SWING).normalized()
 	var swing := Quaternion(d["dir"], target)              # global rotation: rest dir -> target
 	var new_basis := Basis(swing) * (d["rb"] as Basis)     # bone's new global basis
 	var local: Basis = (d["pinv"] as Basis) * new_basis    # back into parent-local space
 	_skel.set_bone_pose_rotation(b, local.get_rotation_quaternion())
+
+
+## Attach a BoneAttachment3D to a hand bone (no-op if the rig lacks it). It rides
+## the bone's animated pose, so a gun parented here stays in the marine's hand.
+func _make_hand_mount(bone_name: String) -> void:
+	if _skel == null:
+		return
+	var bi := _skel.find_bone(bone_name)
+	if bi == -1:
+		return
+	var att := BoneAttachment3D.new()
+	att.bone_name = bone_name
+	_skel.add_child(att)
+	_hand_mounts.append(att)
 
 
 func _find_skeleton(node: Node) -> Skeleton3D:

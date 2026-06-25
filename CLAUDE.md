@@ -15,11 +15,13 @@ marine **auto-fires** its equipped weapons, and you collect loot between waves �
 The sibling `../godot-prototype` is the source of these conventions and the
 reused `src/lib/` utilities.
 
-**Status:** marine (WASD) on the hell island; guns float around him and
-auto-fire bolts at the closest imps; imps spawn in doubling waves (15 → 30 → …),
-dying into gib chunks + blood decals; off-screen imps are flagged on the screen
-border. Next up: real gun/imp models, player health/damage. Specs:
-`docs/superpowers/specs/`.
+**Status:** marine (WASD) on the hell island. It always turns to face the
+nearest imp (combat stance) while WASD strafes/backpedals — legs reverse their
+swing when moving backward. It holds two guns in its hands (bone-attached, aim
+locked to the body's forward); any extra guns float around it. Guns auto-fire
+bolts at the closest imps; imps spawn in doubling waves (15 → 30 → …), dying into
+gib chunks + blood decals; off-screen imps are flagged on the screen border. Next
+up: real gun/imp models, player health/damage. Specs: `docs/superpowers/specs/`.
 
 ## Commands
 
@@ -86,11 +88,11 @@ main.tscn                  # composition-root scene -> src/world/main.gd
 src/
   world/   main.gd          # composition root: env, light, island, marine, waves, weapons, UI, camera
            hell_island.gd   # procedural charred-basalt island (IslandShape + ColorUtil)
-  marine/  marine.gd        # WASD controller; instances marine_01.glb + drives a code walk on its bones
+  marine/  marine.gd        # WASD move + face-nearest-imp; instances marine_01.glb, code walk, hand-bone gun mounts
   enemies/ imp.gd           # "weak imp" placeholder enemy (group "imps"); drifts toward player
            wave_spawner.gd  # scatters a wave of imps across the island (wave 1 = 15)
-  weapons/ gun.gd           # floating placeholder gun; aims, fires bolts on a cooldown, muzzle flash
-           weapon_ring.gd   # N guns around the player; gun i targets the i-th closest imp
+  weapons/ gun.gd           # placeholder gun; self-aims when floating (held guns are aimed by the body), fires bolts, muzzle flash
+           weapon_ring.gd   # first 2 guns held in the marine's hands, rest float; gun i targets the i-th closest imp
   fx/      projectile.gd    # homing bolt; one-shot kills its target imp
            gib.gd           # a flying chunk of a blown-up imp (ballistic, settles, fades)
            gore.gd          # spawns the gib burst + blood decals on death
