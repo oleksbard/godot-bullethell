@@ -1,0 +1,23 @@
+config_version=5
+
+; Hell Marine — a 3D top-down arena survival shooter (Doom x Brotato x loot).
+; Iteration 1: marine + procedural hell island + WASD movement.
+; Open this folder in Godot 4.7 and run, or use ./play.sh / ./edit.sh.
+
+[application]
+
+config/name="Hell Marine"
+run/main_scene="res://main.tscn"
+config/features=PackedStringArray("4.7", "Forward Plus")
+
+[display]
+
+window/size/viewport_width=1280
+window/size/viewport_height=720
+
+[rendering]
+
+; Forward+ for the full post stack (ACES tonemap, glow/bloom, SSAO) the hellish
+; look leans on — same renderer as the sibling prototype.
+renderer/rendering_method="forward_plus"
+renderer/rendering_method.mobile="mobile"

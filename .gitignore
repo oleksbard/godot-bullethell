@@ -1,0 +1,25 @@
+# Godot 4 editor & import cache — regenerated automatically on open/run.
+# Never commit this; it causes churn and merge conflicts.
+.godot/
+
+# Legacy import cache (Godot 3) — harmless to keep ignored.
+.import/
+
+# Export output / machine-specific presets
+export.cfg
+export_presets.cfg
+/build/
+/export/
+
+# Auto-generated translations
+*.translation
+
+# Mono / C# (not used here, ignored for safety)
+.mono/
+data_*/
+mono_crash.*.json
+
+# OS / editor cruft
+.DS_Store
+*~
+docs/superpowers/*
