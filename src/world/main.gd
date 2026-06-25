@@ -14,6 +14,8 @@ const WeaponRingScript := preload("res://src/weapons/weapon_ring.gd")
 const IndicatorsScript := preload("res://src/ui/offscreen_indicators.gd")
 const BattleMusicScript := preload("res://src/audio/battle_music.gd")
 const PauseMenuScript := preload("res://src/ui/pause_menu.gd")
+const PlayerStatsScript := preload("res://src/marine/player_stats.gd")
+const HudScript := preload("res://src/ui/hud.gd")
 
 const CAM_OFFSET := Vector3(0.0, 13.0, 7.0)
 const CAM_SIZE := 18.0             # orthographic vertical extent (smaller = closer)
@@ -32,6 +34,11 @@ func _ready() -> void:
 	marine = MarineScript.new()
 	add_child(marine)
 
+	# Player stats the HUD binds to (damage/XP gain wire in later).
+	var stats := PlayerStatsScript.new()
+	stats.xp = 4.0           # placeholder partial XP so the bar reads as alive
+	marine.add_child(stats)
+
 	# Wave 1 of imps scattered across the island.
 	var spawner := WaveSpawnerScript.new()
 	spawner.player = marine
@@ -49,6 +56,11 @@ func _ready() -> void:
 	var ui := CanvasLayer.new()
 	ui.add_child(IndicatorsScript.new())
 	add_child(ui)
+
+	# Gameplay HUD: animated portrait + HP, full-width XP strip, level.
+	var hud := HudScript.new()
+	hud.stats = stats
+	add_child(hud)
 
 	# ESC pause menu (Resume / Exit).
 	add_child(PauseMenuScript.new())

@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://dndb2gitl1rhm"
-path="res://.godot/imported/_shot.png-303e3cd817c8fbb07f9e1ec3f70ef95e.ctex"
+uid="uid://bqjsfxhgv2ibj"
+path="res://.godot/imported/blood_direct_02.png-896c9200497f235d4d61f19bcd4a22bb.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://test/_shot.png"
-dest_files=["res://.godot/imported/_shot.png-303e3cd817c8fbb07f9e1ec3f70ef95e.ctex"]
+source_file="res://decals/blood_direct_02.png"
+dest_files=["res://.godot/imported/blood_direct_02.png-896c9200497f235d4d61f19bcd4a22bb.ctex"]
 
 [params]
 

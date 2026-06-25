@@ -1,9 +1,10 @@
 class_name Projectile
 extends Node3D
-## A glowing bolt fired by a gun. It homes toward its assigned imp for guidance,
-## but it is NOT locked to it: each frame it kills the first imp its travel
-## actually crosses (swept), and if its assigned target dies it retargets to the
-## nearest imp rather than flying off. Expires after LIFETIME.
+## A glowing bolt fired by a gun. It aims once — at its target's position the
+## instant it spawns — then flies in a straight line. It does NOT home or
+## retarget: if the imp moves out of the way, the bolt misses. Along that
+## straight path it kills the first imp it actually crosses (swept), so a closer
+## imp that wanders into the line still takes the hit. Expires after LIFETIME.
 
 const MeshFactory := preload("res://src/lib/mesh_factory.gd")
 const ImpScript := preload("res://src/enemies/imp.gd")
@@ -35,14 +36,16 @@ func _process(delta: float) -> void:
 		queue_free()
 		return
 
-	# Home toward a target for guidance; reacquire the nearest imp if it died.
-	if not is_instance_valid(target):
-		target = _nearest_imp()
-	if is_instance_valid(target):
-		var aim := target.global_position + Vector3(0.0, AIM_HEIGHT, 0.0)
-		var to := aim - global_position
-		if to.length() > 0.001:
-			_dir = to.normalized()
+	# Lock the heading once, on the first frame, toward where the target is now —
+	# then fly straight. No homing, no retargeting: a dodged shot misses.
+	if _dir == Vector3.ZERO:
+		if is_instance_valid(target):
+			var to := (target.global_position + Vector3(0.0, AIM_HEIGHT, 0.0)) - global_position
+			if to.length() > 0.001:
+				_dir = to.normalized()
+		if _dir == Vector3.ZERO:
+			queue_free()              # nothing to aim at when fired — no shot
+			return
 
 	var prev := global_position
 	global_position += _dir * SPEED * delta
@@ -52,7 +55,7 @@ func _process(delta: float) -> void:
 	var hit := _first_hit(prev, global_position)
 	if hit != null:
 		hit_enemy.emit()
-		hit.die(randi_range(BLOOD_MIN, BLOOD_MAX))
+		hit.die(randi_range(BLOOD_MIN, BLOOD_MAX), _dir)   # pass travel dir: blood + gibs spray forward
 		queue_free()
 
 
@@ -72,19 +75,6 @@ func _first_hit(a: Vector3, b: Vector3) -> Node3D:
 			t = clampf((p - a).dot(ab) / len2, 0.0, 1.0)
 		if (a + ab * t).distance_to(p) < HIT_DIST and t < best_t:
 			best_t = t
-			best = imp
-	return best
-
-
-func _nearest_imp() -> Node3D:
-	var best: Node3D = null
-	var best_d := INF
-	for imp in get_tree().get_nodes_in_group(ImpScript.GROUP):
-		if not is_instance_valid(imp):
-			continue
-		var d := global_position.distance_squared_to((imp as Node3D).global_position)
-		if d < best_d:
-			best_d = d
 			best = imp
 	return best
 

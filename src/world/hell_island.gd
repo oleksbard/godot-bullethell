@@ -69,12 +69,17 @@ static func build() -> Node3D:
 
 ## Vertex-colour rock with a triplanar procedural normal map (no UVs needed).
 static func _rock_material() -> StandardMaterial3D:
+	# Low-frequency fractal (FBM) noise: organic, multi-scale rock grain. The old
+	# frequency (0.9) produced uncorrelated per-pixel static, which — tiled across
+	# the ground — aliased into a regular "rows and columns" lattice.
 	var noise := FastNoiseLite.new()
 	noise.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
-	noise.frequency = 0.9
+	noise.frequency = 0.035
+	noise.fractal_type = FastNoiseLite.FRACTAL_FBM
+	noise.fractal_octaves = 5
 	var ntex := NoiseTexture2D.new()
-	ntex.width = 256
-	ntex.height = 256
+	ntex.width = 512
+	ntex.height = 512
 	ntex.seamless = true
 	ntex.as_normal_map = true
 	ntex.bump_strength = 1.8

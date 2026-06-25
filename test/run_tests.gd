@@ -39,7 +39,7 @@ func _initialize() -> void:
 	_test_arm_splay()
 	await _test_imp_separation()
 	await _test_projectile_hits_path()
-	await _test_projectile_retargets()
+	await _test_projectile_misses()
 	await _test_shot_sfx()
 	await _test_impact_sfx()
 	print("──")
@@ -227,8 +227,9 @@ func _test_imp_die() -> void:
 	var blood_before := get_nodes_in_group("blood").size()
 	imp.die(4)                                # killer passes the blood amount (projectile type)
 	_ok(get_nodes_in_group("imps").size() == 0, "die() removes it from the target group")
-	_ok(get_nodes_in_group("blood").size() - blood_before == 4,
-		"die(n) spawns exactly n blood spatters (%d new)" % (get_nodes_in_group("blood").size() - blood_before))
+	# n directional spray decals + 1 round impact pool laid on top.
+	_ok(get_nodes_in_group("blood").size() - blood_before == 5,
+		"die(n) spawns n spray decals + 1 impact pool (%d new)" % (get_nodes_in_group("blood").size() - blood_before))
 	await process_frame                       # let the queued free run
 	holder.free()                             # frees gibs + blood too
 
@@ -372,26 +373,30 @@ func _test_projectile_hits_path() -> void:
 	holder.free()
 
 
-func _test_projectile_retargets() -> void:
-	_suite = "Projectile.retarget"
+func _test_projectile_misses() -> void:
+	_suite = "Projectile.miss"
 	var holder := Node3D.new()
 	get_root().add_child(holder)
-	var other: Node3D = ImpScript.new()
-	holder.add_child(other)
-	other.global_position = Vector3(4.0, 0.0, 0.0)
-	other.set_process(false)
-	await process_frame
+	var imp: Node3D = ImpScript.new()
+	holder.add_child(imp)
+	imp.global_position = Vector3(0.0, 0.0, -10.0)   # straight ahead (-Z), far off
+	imp.set_process(false)
 	var p: Node3D = ProjectileScript.new()
-	p.target = null                       # no target -> must reacquire `other`
+	p.target = imp
 	holder.add_child(p)
 	p.global_position = Vector3(0.0, 0.6, 0.0)
 	await process_frame
 
+	p._process(0.016)                                 # locks heading toward -Z
+	imp.global_position = Vector3(20.0, 0.0, -10.0)   # imp dodges off the bolt's line
+
+	var hit := false
 	for i in 200:
-		p._process(0.016)
-		if other.is_queued_for_deletion():
+		p._process(0.05)
+		if imp.is_queued_for_deletion():
+			hit = true
 			break
-	_ok(other.is_queued_for_deletion(), "a target-less bolt reacquires and kills another imp")
+	_ok(not hit, "a bolt flies straight and misses a target that left its path")
 	holder.free()
 
 

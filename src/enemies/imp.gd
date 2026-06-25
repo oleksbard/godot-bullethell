@@ -26,13 +26,14 @@ func _ready() -> void:
 
 ## Killed by a projectile: leave gore, drop out of the target group, vanish.
 ## `blood_spatters` is set by the killing projectile (its type decides how gory);
-## the default covers non-combat clears (e.g. wiping a wave).
-func die(blood_spatters: int = 3) -> void:
+## `hit_dir` is the bolt's travel direction so the blood + gibs spray forward.
+## The defaults cover non-combat clears (e.g. wiping a wave → random spray dir).
+func die(blood_spatters: int = 3, hit_dir: Vector3 = Vector3.ZERO) -> void:
 	if _dead:
 		return                          # guard: two bolts can land the same frame
 	_dead = true
 	remove_from_group(GROUP)            # stop other guns/bolts targeting a corpse
-	Gore.spawn_death(get_parent(), global_position, BODY_COLOR, blood_spatters)
+	Gore.spawn_death(get_parent(), global_position, BODY_COLOR, blood_spatters, hit_dir)
 	queue_free()
 
 
