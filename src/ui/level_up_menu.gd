@@ -12,14 +12,18 @@ extends CanvasLayer
 ## crisp at any scale (no transform/bitmap upscaling) and hit-testing uses real sizes.
 
 const GridViewScript := preload("res://src/ui/grid_view.gd")
+const ItemTooltipScript := preload("res://src/ui/item_tooltip.gd")
+const DragGhostScript := preload("res://src/ui/drag_ghost.gd")
+const UiFxScript := preload("res://src/ui/ui_fx.gd")
+const InventorySfxScript := preload("res://src/audio/inventory_sfx.gd")
 
 const DIM := Color(0.02, 0.0, 0.0, 1.0)   # solid near-black: a clean modal backdrop (also hides the frozen HUD banner behind it)
 const EMBER := Color(1.0, 0.45, 0.2)
+const SOUL := Color(0.2, 0.85, 1.0)       # cyan soul-mote colour (matches the HUD counter)
 const EMBER_DIM := Color(0.62, 0.22, 0.1)
 const PANEL_BG := Color(0.06, 0.02, 0.02, 0.92)
 const BTN_BG := Color(0.06, 0.02, 0.02, 0.92)
-const GHOST_OK := Color(0.3, 1.0, 0.3, 0.5)
-const GHOST_BAD := Color(1.0, 0.3, 0.3, 0.5)
+const DROP_FLASH := Color(1.0, 0.85, 0.55, 0.5)   # warm flash over a freshly-dropped item
 const UPGRADE_SLOTS := 4
 
 # Scaling: the centred content is sized to cover this fraction of the viewport's
@@ -30,9 +34,11 @@ const MIN_SCALE := 0.4
 # Base (k = 1) sizes; everything is laid out at base × k.
 const BASE_CELL := 44
 const BASE_TITLE_FONT := 52
+const BASE_SOULS_FONT := 30
 const BASE_LABEL_FONT := 26
 const BASE_BTN_FONT := 30
 const BASE_STUB := 64
+const BASE_TOOLTIP_FONT := 21
 const BASE_BTN_SIZE := Vector2(260, 64)
 const BASE_CONTENT_SEP := 18
 const BASE_COL_SEP := 48
@@ -42,6 +48,7 @@ const DESIGN_FALLBACK := Vector2(680, 600)   # used if the natural size can't be
 
 var inventory: Node                 # Inventory; set by Main
 var hud: Node                       # Hud (for clear_levelup_medals); set by Main
+var stats: Node                     # PlayerStats (for the souls readout); set by Main
 
 var _open := false
 var _root: Control
@@ -51,17 +58,21 @@ var _left: VBoxContainer
 var _right: VBoxContainer
 var _upgrade_row: HBoxContainer
 var _title: Label
+var _souls_label: Label             # "N SOULS" banked-currency readout under the title
 var _section_labels: Array[Label] = []
 var _stubs: Array[Panel] = []
 var _continue: Button
 var _base_natural := Vector2.ZERO   # content's natural size at k = 1, measured once
 var _cell_size := BASE_CELL         # current scaled cell size (drives the ghost too)
+var _tooltip_font := BASE_TOOLTIP_FONT   # current scaled tooltip body font
+var _tooltip: ItemTooltipScript     # hover tooltip for the item under the cursor
 var _backpack_view: GridViewScript
 var _stash_view: GridViewScript
 var _held: Object                   # InventoryItem or null
 var _held_from: Object              # InventoryGrid the held item came from
 var _held_origin: Vector2i          # where to return it on CONTINUE
-var _ghost: Control                 # follows the cursor while holding
+var _ghost: DragGhostScript         # follows the cursor while holding (icon + fit tint)
+var _sfx: InventorySfxScript        # pick/drop one-shot UI sounds (plays while paused)
 
 
 func _ready() -> void:
@@ -77,6 +88,7 @@ func open(_level: int = 0) -> void:
 	if _open:
 		return
 	_open = true
+	_souls_label.text = "%d SOULS" % (stats.souls if stats != null else 0)
 	_apply_layout_scale()
 	_refresh_views()
 	visible = true
@@ -90,6 +102,8 @@ func close() -> void:
 	if _held != null:
 		inventory.drop(_held_from, _held, _held_origin)   # never lose a held item (origin is free)
 		_end_hold()
+	if _tooltip != null:
+		_tooltip.hide_tip()
 	_open = false
 	visible = false
 	get_tree().paused = false
@@ -124,6 +138,13 @@ func _build() -> void:
 	_title.add_theme_color_override("font_color", EMBER)
 	_content.add_child(_title)
 
+	_souls_label = Label.new()
+	_souls_label.text = "0 SOULS"
+	_souls_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_souls_label.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	_souls_label.add_theme_color_override("font_color", SOUL)
+	_content.add_child(_souls_label)
+
 	_columns = HBoxContainer.new()
 	_columns.alignment = BoxContainer.ALIGNMENT_CENTER
 	_columns.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
@@ -156,6 +177,15 @@ func _build() -> void:
 	_continue = _make_button("CONTINUE", close)
 	_right.add_child(_continue)
 
+	# Hover tooltip, on top of everything (above the ghost's z_index 100).
+	_tooltip = ItemTooltipScript.new()
+	_tooltip.z_index = 200
+	_root.add_child(_tooltip)
+
+	# Pick/drop UI sounds (non-visual; plays while the tree is paused).
+	_sfx = InventorySfxScript.new()
+	add_child(_sfx)
+
 	# Measure the natural size at base scale once, then scale to the viewport.
 	_set_sizes(1.0)
 	_base_natural = _content.get_combined_minimum_size()
@@ -177,7 +207,9 @@ func _apply_layout_scale() -> void:
 ## Apply base × k to every size-driving property. Native sizing keeps it crisp.
 func _set_sizes(k: float) -> void:
 	_cell_size = maxi(8, roundi(BASE_CELL * k))
+	_tooltip_font = maxi(13, roundi(BASE_TOOLTIP_FONT * k))   # floor so stats stay readable
 	_title.add_theme_font_size_override("font_size", maxi(8, roundi(BASE_TITLE_FONT * k)))
+	_souls_label.add_theme_font_size_override("font_size", maxi(8, roundi(BASE_SOULS_FONT * k)))
 	for l in _section_labels:
 		l.add_theme_font_size_override("font_size", maxi(6, roundi(BASE_LABEL_FONT * k)))
 	_continue.add_theme_font_size_override("font_size", maxi(6, roundi(BASE_BTN_FONT * k)))
@@ -246,8 +278,11 @@ func _input(event: InputEvent) -> void:
 		if not _view_and_cell(event.position).is_empty():
 			_on_click(event.position)
 			get_viewport().set_input_as_handled()
-	elif event is InputEventMouseMotion and _held != null:
-		_update_ghost(event.position)
+	elif event is InputEventMouseMotion:
+		if _held != null:
+			_update_ghost(event.position)        # dragging: the ghost tracks the cursor
+		else:
+			_update_tooltip(event.position)      # idle: show the hovered item's stats
 	elif event is InputEventKey and event.pressed and event.keycode == KEY_SPACE and _held != null:
 		_held.rot = (_held.rot + 1) % 4
 		_update_ghost(get_viewport().get_mouse_position())
@@ -267,7 +302,13 @@ func _on_click(screen_pos: Vector2) -> void:
 			_begin_hold(grid, it)
 			_update_ghost(screen_pos)
 	else:
+		var view: Control = hit[0]
+		var dropped: Object = _held
 		if inventory.drop(grid, _held, cell):     # places + emits changed if it fits
+			_sfx.play_drop()
+			var rect := _footprint_rect(view, cell, dropped)
+			_flash_rect(rect, DROP_FLASH)
+			UiFxScript.ring(_root, rect.get_center(), EMBER, _cell_size * 1.5, maxf(3.0, _cell_size * 0.12))
 			_end_hold()
 			_refresh_views()
 
@@ -277,9 +318,26 @@ func _begin_hold(grid: Object, item: Object) -> void:
 	_held = item
 	_held_from = grid
 	_held_origin = grid.origin_of[item]
+	if _tooltip != null:
+		_tooltip.hide_tip()                       # picked up -> no hover tooltip while dragging
+	var center := _footprint_rect(_view_of(grid), _held_origin, item).get_center()
 	inventory.pick_up(grid, item)                 # unequips if it was the backpack
+	_sfx.play_pick()
 	_refresh_views()
 	_make_ghost()
+	UiFxScript.ring(_root, center, EMBER, _cell_size * 1.5, maxf(3.0, _cell_size * 0.12))
+
+
+## Show the tooltip for the item under the cursor, or hide it when over empty space.
+func _update_tooltip(screen_pos: Vector2) -> void:
+	var it: Object = null
+	var hit := _view_and_cell(screen_pos)
+	if not hit.is_empty():
+		it = hit[1].item_at(hit[2])
+	if it == null:
+		_tooltip.hide_tip()
+	else:
+		_tooltip.show_for(it, screen_pos, _tooltip_font)
 
 
 func _end_hold() -> void:
@@ -306,35 +364,60 @@ func _refresh_views() -> void:
 
 
 func _make_ghost() -> void:
-	_ghost = Control.new()
-	_ghost.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_ghost.z_index = 100
+	_ghost = DragGhostScript.new()
 	_root.add_child(_ghost)
-	for _i in _held.cells().size():
-		_ghost.add_child(ColorRect.new())
+	_ghost.setup(_held, _cell_size)
 
 
 ## Snap the ghost to the hovered cell (green if it fits there, red if not); when off
 ## any grid, free-float at the cursor. Anchors the item's first cell to the cursor cell.
-## Sizes track the current scaled cell so the ghost matches the grids.
+## The ghost draws the item's icon (spun to its rot) so a rotate is reflected at once.
 func _update_ghost(screen_pos: Vector2) -> void:
 	if _ghost == null:
 		return
-	var cells: Array = _held.cells()
-	var step := _cell_size + GridViewScript.GAP
 	var hit := _view_and_cell(screen_pos)
 	var base: Vector2
-	var col := GHOST_BAD
+	var fits := false
 	if not hit.is_empty():
 		var view: Control = hit[0]
 		var grid: Object = hit[1]
 		var cell: Vector2i = hit[2]
 		base = view.global_position + view.cell_origin(cell)
-		col = GHOST_OK if grid.fits(_held, cell) else GHOST_BAD
+		fits = grid.fits(_held, cell)
 	else:
 		base = screen_pos
-	for i in cells.size():
-		var r: ColorRect = _ghost.get_child(i)
-		r.color = col
-		r.size = Vector2(_cell_size, _cell_size)
-		r.position = base + Vector2(cells[i].x, cells[i].y) * step
+	_ghost.position = base
+	_ghost.set_fit(fits)
+	_ghost.queue_redraw()                # reflect a SPACE-rotate (cells/icon change in place)
+
+
+## A footprint's screen rect, for spawning pickup/drop FX over it.
+func _footprint_rect(view: Control, origin: Vector2i, item: Object) -> Rect2:
+	var bc := 0
+	var br := 0
+	for c in item.cells():
+		bc = maxi(bc, c.x)
+		br = maxi(br, c.y)
+	var top_left: Vector2 = view.global_position + view.cell_origin(origin)
+	var sz := Vector2(float(bc + 1) * _cell_size + float(bc) * GridViewScript.GAP,
+		float(br + 1) * _cell_size + float(br) * GridViewScript.GAP)
+	return Rect2(top_left, sz)
+
+
+func _view_of(grid: Object) -> Control:
+	return _backpack_view if grid == inventory.backpack else _stash_view
+
+
+## A brief bright overlay over `rect` that fades out — the drop "land" flash.
+func _flash_rect(rect: Rect2, color: Color) -> void:
+	var cr := ColorRect.new()
+	cr.process_mode = Node.PROCESS_MODE_ALWAYS
+	cr.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	cr.z_index = 90
+	cr.color = color
+	cr.position = rect.position
+	cr.size = rect.size
+	_root.add_child(cr)
+	var tw := cr.create_tween()
+	tw.tween_property(cr, "modulate:a", 0.0, 0.32).from(1.0)
+	tw.tween_callback(cr.queue_free)

@@ -184,6 +184,13 @@ func gain_xp(amount: float) -> void:
 	stats.add_xp(amount)
 
 
+## Bank souls from a collected soul-mote — forwards to PlayerStats. No-op once dead.
+func gain_souls(amount: int) -> void:
+	if not _alive or stats == null:
+		return
+	stats.add_souls(amount)
+
+
 ## Health hit 0: stop combat, flash, topple over, and tell Main (which raises the
 ## game-over menu after the fall plays).
 func _die() -> void:

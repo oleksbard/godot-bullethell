@@ -8,6 +8,7 @@ const ImpScript := preload("res://src/enemies/imp.gd")
 const MARGIN := 30.0                         # inset from the screen edge
 const SIZE := 18.0                           # arrow size
 const COLOR := Color(1.0, 0.28, 0.12, 0.92)  # hellish red-orange
+const MAX_MARKERS := 6                       # only arrow the nearest few off-screen imps
 
 
 func _ready() -> void:
@@ -25,10 +26,13 @@ func _draw() -> void:
 		return
 	var rect := get_viewport_rect()
 	var center := rect.size * 0.5
+	var cam_pos := cam.global_position
+	var markers: Array = []                   # off-screen imps: {d, at, dir}
 	for imp in get_tree().get_nodes_in_group(ImpScript.GROUP):
 		if not is_instance_valid(imp):
 			continue
-		var wp: Vector3 = (imp as Node3D).global_position + Vector3(0.0, 0.6, 0.0)
+		var node := imp as Node3D
+		var wp: Vector3 = node.global_position + Vector3(0.0, 0.6, 0.0)
 		var behind := cam.is_position_behind(wp)
 		var sp := cam.unproject_position(wp)
 		if not behind and rect.has_point(sp):
@@ -39,7 +43,15 @@ func _draw() -> void:
 		if dir.length() < 0.001:
 			continue
 		dir = dir.normalized()
-		_draw_arrow(_edge_point(center, dir, rect), dir)
+		markers.append({
+			"d": cam_pos.distance_squared_to(node.global_position),
+			"at": _edge_point(center, dir, rect),
+			"dir": dir,
+		})
+	# Only the nearest few: sort by distance and arrow up to MAX_MARKERS, hide the rest.
+	markers.sort_custom(func(a, b): return a["d"] < b["d"])
+	for i in mini(MAX_MARKERS, markers.size()):
+		_draw_arrow(markers[i]["at"], markers[i]["dir"])
 
 
 ## Where the ray from the centre along `dir` meets the inset screen rectangle.

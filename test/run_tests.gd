@@ -25,6 +25,7 @@ const InventoryItemScript := preload("res://src/inventory/inventory_item.gd")
 const InventoryGridScript := preload("res://src/inventory/inventory_grid.gd")
 const InventoryScript := preload("res://src/inventory/inventory.gd")
 const GridViewScript := preload("res://src/ui/grid_view.gd")
+const ItemTooltipScript := preload("res://src/ui/item_tooltip.gd")
 const LevelUpMenuScript := preload("res://src/ui/level_up_menu.gd")
 const HudScript := preload("res://src/ui/hud.gd")
 
@@ -39,6 +40,7 @@ func _initialize() -> void:
 	_test_inventory_item()
 	_test_inventory_grid()
 	_test_inventory()
+	_test_item_tooltip()
 	_test_grid_view()
 	_test_marine_clamp()
 	await _test_marine_model()
@@ -71,6 +73,8 @@ func _initialize() -> void:
 	await _test_impact_sfx()
 	await _test_level_up_menu()
 	await _test_hud_clear_medals()
+	await _test_hud_xp_animation()
+	await _test_souls()
 	print("──")
 	print("%d passed, %d failed" % [_passed, _failed])
 	quit(1 if _failed > 0 else 0)
@@ -371,6 +375,7 @@ func _test_xp_orb() -> void:
 	orb3._process(0.05)
 	_ok(orb3.is_queued_for_deletion(), "an orb within collect range is collected (freed)")
 	_ok(is_equal_approx(st.xp, 5.0), "collecting an orb credits the player's XP (%.1f)" % st.xp)
+	_ok(st.souls == 1, "collecting an orb banks one soul (souls %d)" % st.souls)
 	holder.free()
 
 
@@ -892,6 +897,36 @@ func _test_inventory() -> void:
 	inv.free()
 
 
+func _test_item_tooltip() -> void:
+	_suite = "ItemTooltip"
+	var p := InventoryItemScript.pistol()
+	_ok(p.display_name() == "Pistol", "pistol display name")
+	_ok(p.rarity() == "Normal" and p.level() == 1, "pistol is Normal / Lvl 1")
+	_ok(p.flavor().length() > 0, "pistol has flavour text")
+
+	var rows := ItemTooltipScript.format_stats(p)
+	var shown := {}
+	for r in rows:
+		shown[r[0]] = r[1]
+	_ok(shown.has("Damage") and shown["Damage"] == "5", "Damage shows as 5")
+	_ok(not shown.has("Projectile"), "Projectile is no longer a stat row (it's a header tag)")
+	_ok(not shown.has("Piercing") and not shown.has("Ricochet"),
+		"zero-valued stats (Piercing/Ricochet) are hidden")
+	_ok(shown.has("Magazine") and shown["Magazine"] == "7", "Magazine shows 7")
+
+	# Type + tags: pistol is a Gun and is tagged both Projectile and Gun.
+	_ok(p.type_name() == "Gun", "pistol Type is Gun")
+	_ok(p.tags().has("Projectile") and p.tags().has("Gun"), "pistol header tags include Projectile + Gun")
+
+	# Manual flavour wrap: no line exceeds the limit, and no word is lost.
+	var wrapped := ItemTooltipScript._wrap(p.flavor(), 20)
+	var longest := 0
+	for line in wrapped.split("\n"):
+		longest = maxi(longest, line.length())
+	_ok(longest <= 20, "wrap keeps lines within the char limit (longest %d)" % longest)
+	_ok(wrapped.replace("\n", " ") == p.flavor(), "wrap preserves the words and order")
+
+
 func _test_grid_view() -> void:
 	_suite = "GridView"
 	var gv: Control = GridViewScript.new()
@@ -907,13 +942,17 @@ func _test_grid_view() -> void:
 func _test_level_up_menu() -> void:
 	_suite = "LevelUpMenu"
 	var inv: Node = InventoryScript.build()
+	var st: Node = PlayerStatsScript.new()
+	st.souls = 5
 	var menu: CanvasLayer = LevelUpMenuScript.new()
 	menu.inventory = inv
+	menu.stats = st
 	get_root().add_child(menu)
 	await process_frame                       # _ready builds the UI
 
 	menu.open(2)
 	_ok(paused and menu.visible, "open() pauses the tree and shows the menu")
+	_ok(menu._souls_label.text == "5 SOULS", "menu shows the banked soul count (%s)" % menu._souls_label.text)
 	menu.open(3)
 	_ok(menu._open, "open() is idempotent while already open")
 	menu.close()
@@ -929,6 +968,7 @@ func _test_level_up_menu() -> void:
 	paused = false                            # safety: ensure unpaused for later tests
 	menu.free()
 	inv.free()
+	st.free()
 
 
 func _test_hud_clear_medals() -> void:
@@ -944,6 +984,64 @@ func _test_hud_clear_medals() -> void:
 	hud.clear_levelup_medals()
 	await process_frame                       # let queue_free run
 	_ok(hud._lvlup_stack.get_child_count() == 0, "clear_levelup_medals empties the stack")
+	hud.free()
+	stats.free()
+
+
+func _test_hud_xp_animation() -> void:
+	_suite = "Hud.xp"
+	var stats: Node = PlayerStatsScript.new()
+	var hud: CanvasLayer = HudScript.new()
+	hud.stats = stats
+	get_root().add_child(hud)
+	await process_frame                       # _ready builds the HUD + seeds the bar
+
+	var reached := [0]
+	hud.level_reached.connect(func(l: int) -> void: reached[0] = l)
+
+	# Gain less than a level: the bar animates toward it; no level-up.
+	stats.add_xp(4.0)
+	for i in 40:
+		hud._animate_xp(0.05)
+	_ok(reached[0] == 0, "no level_reached while the bar is below 100%")
+	_ok(absf(hud._xp.value - 4.0) < 0.05 and hud._xp_level == 1,
+		"bar animates to the gained XP, still level 1 (value %.1f)" % hud._xp.value)
+
+	# Cross the threshold: stats level up at once, but the flourish waits for the bar.
+	stats.add_xp(8.0)                         # total 12 > 10 -> stats.level becomes 2 now
+	_ok(stats.level == 2, "stats level up immediately (authoritative)")
+	_ok(reached[0] == 0, "the bar hasn't filled yet -> level_reached still not fired")
+
+	var saw_full := false
+	for i in 60:
+		hud._animate_xp(0.05)
+		if reached[0] != 0:
+			saw_full = true
+			break
+	_ok(saw_full and reached[0] == 2, "level_reached(2) fires only when the bar hits 100%")
+	_ok(hud._xp_level == 2, "the bar advances to level 2 after filling")
+
+	hud.free()
+	stats.free()
+
+
+func _test_souls() -> void:
+	_suite = "Souls"
+	var stats: Node = PlayerStatsScript.new()
+	var got := [-1]
+	stats.souls_changed.connect(func(s: int) -> void: got[0] = s)
+	stats.add_souls()
+	_ok(stats.souls == 1 and got[0] == 1, "add_souls() banks one and emits (souls %d)" % stats.souls)
+	stats.add_souls(3)
+	_ok(stats.souls == 4, "add_souls(n) accumulates (souls %d)" % stats.souls)
+
+	var hud: CanvasLayer = HudScript.new()
+	hud.stats = stats
+	get_root().add_child(hud)
+	await process_frame                       # _ready builds the counter + binds
+	_ok(hud._souls_count.text == "4", "HUD counter shows the current souls (%s)" % hud._souls_count.text)
+	stats.add_souls(2)
+	_ok(hud._souls_count.text == "6", "HUD counter updates on souls_changed (%s)" % hud._souls_count.text)
 	hud.free()
 	stats.free()
 

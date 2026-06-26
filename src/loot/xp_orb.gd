@@ -70,6 +70,8 @@ func _process(delta: float) -> void:
 	if dist <= COLLECT_RADIUS:
 		if player.has_method("gain_xp"):
 			player.gain_xp(xp_value)
+		if player.has_method("gain_souls"):
+			player.gain_souls(1)          # each mote is one demon's soul
 		queue_free()
 
 

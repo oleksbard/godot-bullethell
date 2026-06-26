@@ -66,8 +66,9 @@ func _ready() -> void:
 	var levelup := LevelUpMenuScript.new()
 	levelup.inventory = inventory
 	levelup.hud = hud
+	levelup.stats = stats
 	add_child(levelup)
-	stats.leveled_up.connect(levelup.open)
+	hud.level_reached.connect(levelup.open)   # open on a FULL bar, not the instant XP crosses the threshold
 
 	# Wave spawner — announces imp spawns + wave boundaries; we wire them to loot + HUD here.
 	var spawner := WaveSpawnerScript.new()

@@ -11,6 +11,14 @@ extends CanvasLayer
 ##   * HP bar    — crimson, to the right of the portrait, with "hp / max" text
 ## Binds to a PlayerStats via signals; set `stats` before adding to the tree.
 ## Reuses the pause-menu ember palette + the Oswald default font for consistency.
+##
+## The XP bar is ANIMATED: it slides toward the player's lifetime XP, and the
+## level-up flourish (badge punch, medal, banner) + the `level_reached` signal
+## (which opens the level-up menu) fire only when the bar actually reaches 100%.
+
+## Emitted when the animated XP bar fills a level (NOT the instant a threshold is
+## crossed). Main wires this to the level-up menu so the modal opens on a full bar.
+signal level_reached(level: int)
 
 const MarineModel: PackedScene = preload("res://models/marine_01.glb")
 
@@ -21,6 +29,8 @@ const PANEL_BG := Color(0.06, 0.02, 0.02, 0.92)
 const TRACK_BG := Color(0.03, 0.01, 0.01, 0.9)
 const HP_FILL := Color(0.8, 0.09, 0.06)
 const XP_FILL := Color(1.0, 0.62, 0.16)
+const SOUL := Color(0.2, 0.85, 1.0)        # cold cyan — matches the collected soul-motes (xp_orb.gd)
+const SOUL_RIM := Color(0.7, 0.97, 1.0)
 
 # Layout.
 const MARGIN := 12
@@ -38,6 +48,7 @@ const FACE_RAISE_FRAC := 0.05  # aim a touch above the Head bone (skull base -> 
 const FALLBACK_HEAD := Vector3(0.0, 1.6, 0.0)  # used if the rig has no Head bone
 const SWAY := 0.16          # idle head turn (radians)
 const BOB := 0.02           # idle vertical bob (metres)
+const XP_FILL_PER_SEC := 1.6   # XP-bar fill speed, in bars/sec (a full bar slides in ~0.6 s)
 
 var stats: Node             # PlayerStats; set before add_child
 
@@ -48,9 +59,18 @@ var _lv: Label              # the number inside the medallion
 var _lv_badge: Panel        # circular level medallion (overlaps the portrait corner)
 var _wave_label: Label      # "WAVE N", top-centre
 var _lvlup_stack: Control   # per-wave level-up medals, stacked under the HP bar
-var _level_shown := 0       # last level drawn; distinguishes init from a real level-up
+var _souls_orb: Panel       # cyan soul-mote glyph in the top-right counter
+var _souls_count: Label     # banked-souls number beside it
 var _portrait: Node3D
 var _t := 0.0
+
+# Animated XP bar state. The bar shows _xp_disp (lifetime XP), sliding toward
+# _xp_target; _xp_level is the level the bar currently sits in.
+var _xp_target := 0.0       # authoritative lifetime XP (from PlayerStats.total_xp)
+var _xp_disp := 0.0         # lifetime XP the bar currently represents (animated)
+var _xp_level := 1          # level the animated bar is currently filling
+var _xp_level_start := 0.0  # lifetime XP at the start of _xp_level
+var _xp_to_next := 10.0     # XP span of _xp_level (stats.xp_for(_xp_level))
 
 
 func _ready() -> void:
@@ -59,18 +79,40 @@ func _ready() -> void:
 		return
 	stats.health_changed.connect(_on_health)
 	stats.xp_changed.connect(_on_xp)
-	stats.leveled_up.connect(_on_level)
+	stats.souls_changed.connect(_on_souls)
 	_on_health(stats.health, stats.max_health)   # pull the current state once
-	_on_xp(stats.xp, stats.xp_to_next)
-	_on_level(stats.level)
+	_init_xp_display()
+	_souls_count.text = str(stats.souls)          # initial count (no pop on bind)
 
 
 func _process(delta: float) -> void:
+	_animate_xp(delta)
 	if _portrait == null:
 		return
 	_t += delta
 	_portrait.rotation.y = sin(_t * 0.8) * SWAY
 	_portrait.position.y = absf(sin(_t * 1.6)) * BOB
+
+
+## Slide the bar toward the target lifetime XP. When it reaches the end of the
+## current level (a full bar), stop exactly on the boundary, advance a level, and
+## fire the flourish + level_reached — so the level-up only ever shows at 100%.
+## (While the level-up menu is open the tree is paused, so this naturally halts at
+## the full bar until the player continues.)
+func _animate_xp(delta: float) -> void:
+	if _xp_disp >= _xp_target:
+		return
+	_xp_disp = minf(_xp_disp + _xp_to_next * XP_FILL_PER_SEC * delta, _xp_target)
+	if _xp_disp - _xp_level_start >= _xp_to_next:
+		_xp_disp = _xp_level_start + _xp_to_next      # land exactly on the boundary (no overshoot)
+		_xp.max_value = _xp_to_next
+		_xp.value = _xp_to_next                       # show the full bar this frame
+		_xp_level += 1
+		_xp_level_start += _xp_to_next
+		_xp_to_next = stats.xp_for(_xp_level)
+		_present_level_up(_xp_level)
+	else:
+		_update_xp_bar()
 
 
 func _build() -> void:
@@ -84,6 +126,7 @@ func _build() -> void:
 	_build_level_badge(root)
 	_build_wave_label(root)
 	_build_lvlup_stack(root)
+	_build_souls(root)
 
 
 func _build_xp(root: Control) -> void:
@@ -233,6 +276,44 @@ func _build_wave_label(root: Control) -> void:
 	root.add_child(_wave_label)
 
 
+## Souls counter, pinned to the top-right: a cyan soul-mote glyph + running count.
+## Souls are banked from collected motes; future upgrades will spend them.
+func _build_souls(root: Control) -> void:
+	var strip := HBoxContainer.new()
+	strip.set_anchors_preset(Control.PRESET_TOP_WIDE)
+	strip.alignment = BoxContainer.ALIGNMENT_END        # pack to the right edge
+	strip.offset_top = XP_HEIGHT + MARGIN
+	strip.offset_left = MARGIN
+	strip.offset_right = -MARGIN
+	strip.add_theme_constant_override("separation", 8)
+	strip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.add_child(strip)
+
+	var sz := 26
+	_souls_orb = Panel.new()
+	_souls_orb.custom_minimum_size = Vector2(sz, sz)
+	_souls_orb.pivot_offset = Vector2(sz, sz) * 0.5     # punch scales from the centre
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = SOUL
+	sb.border_color = SOUL_RIM
+	sb.set_border_width_all(2)
+	sb.set_corner_radius_all(sz / 2)                    # full radius -> circle (a glowing mote)
+	_souls_orb.add_theme_stylebox_override("panel", sb)
+	_souls_orb.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	strip.add_child(_souls_orb)
+
+	_souls_count = Label.new()
+	_souls_count.text = "0"
+	_souls_count.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_souls_count.add_theme_font_size_override("font_size", 26)
+	_souls_count.add_theme_color_override("font_color", SOUL)
+	_souls_count.add_theme_color_override("font_shadow_color", Color(0.0, 0.0, 0.0, 0.9))
+	_souls_count.add_theme_constant_override("shadow_offset_x", 2)
+	_souls_count.add_theme_constant_override("shadow_offset_y", 2)
+	_souls_count.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	strip.add_child(_souls_count)
+
+
 ## A stack of medals under the HP bar — one per level gained this wave (cleared at wave start).
 func _build_lvlup_stack(root: Control) -> void:
 	_lvlup_stack = Control.new()
@@ -330,19 +411,47 @@ func _on_health(hp: float, max_hp: float) -> void:
 	_hp_label.text = "%d / %d" % [roundi(hp), roundi(max_hp)]
 
 
-func _on_xp(xp: float, to_next: float) -> void:
-	_xp.max_value = to_next
-	_xp.value = xp
+## New lifetime-XP target from PlayerStats; the bar animates toward it in _process.
+func _on_xp(total_xp: float) -> void:
+	_xp_target = total_xp
 
 
-func _on_level(level: int) -> void:
+## Banked soul count changed — update the counter and pop the mote a touch.
+func _on_souls(souls: int) -> void:
+	if _souls_count == null:
+		return
+	_souls_count.text = str(souls)
+	_souls_orb.scale = Vector2(1.5, 1.5)
+	var tw := _souls_orb.create_tween()
+	tw.tween_property(_souls_orb, "scale", Vector2.ONE, 0.25).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+
+
+## Seed the animated bar from the current stats (level + lifetime XP), no animation.
+func _init_xp_display() -> void:
+	_xp_level = stats.level
+	_xp_to_next = stats.xp_for(_xp_level)
+	_xp_level_start = 0.0
+	for lvl in range(1, _xp_level):
+		_xp_level_start += stats.xp_for(lvl)
+	_xp_target = stats.total_xp
+	_xp_disp = stats.total_xp
+	_lv.text = str(_xp_level)
+	_update_xp_bar()
+
+
+func _update_xp_bar() -> void:
+	_xp.max_value = _xp_to_next
+	_xp.value = clampf(_xp_disp - _xp_level_start, 0.0, _xp_to_next)
+
+
+## The bar just filled to 100% of a level — show the level number, the flourish, and
+## tell Main (which opens the level-up menu). Fires once per level, at the full bar.
+func _present_level_up(level: int) -> void:
 	_lv.text = str(level)
-	if _level_shown > 0 and level > _level_shown:    # a real level-up (not the initial bind)
-		_punch_badge()
-		for _lvl in (level - _level_shown):
-			_add_lvlup_medal()
-		_play_levelup_effect()
-	_level_shown = level
+	_punch_badge()
+	_add_lvlup_medal()
+	_play_levelup_effect()
+	level_reached.emit(level)
 
 
 ## A StyleBoxFlat with optional border + corner radius.
