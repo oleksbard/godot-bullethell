@@ -8,6 +8,10 @@ extends Node3D
 ## starts hunting. Imps register themselves in the "imps" group, so nothing else
 ## needs a direct reference to them.
 
+signal imp_spawned(imp: Node)    # each portalled-in imp (Main binds it to the XP-orb field)
+signal wave_started(wave: int)   # a new wave began (Main resets the HUD level-up stack)
+signal wave_cleared()            # drip done & 0 imps left (Main vacuums leftover XP orbs)
+
 const ImpScript := preload("res://src/enemies/imp.gd")
 const PortalScript := preload("res://src/fx/portal.gd")
 const IslandShape := preload("res://src/lib/island_shape.gd")
@@ -15,6 +19,7 @@ const IslandShape := preload("res://src/lib/island_shape.gd")
 const WAVE_1_COUNT := 15
 const HP_PER_WAVE := 3.0         # imp HP added per wave (pistol dmg 5: w1=1 shot, w2-3=2 shots, w4-5=3...)
 const ATTACK_DMG_PER_WAVE := 1.0 # imp melee damage added per wave (wave 1 = 1, wave 2 = 2, ...)
+const XP_PER_WAVE := 1.0         # imp XP value added per wave (tougher imps worth more)
 const WAVE_DELAY := 5.0          # pause after a wave is cleared
 const SPAWN_MARGIN := 2.0        # keep spawns inside the coast
 const MIN_FROM_CENTER := 6.0     # don't spawn on top of the player (spawns at centre)
@@ -61,6 +66,7 @@ func _process(delta: float) -> void:
 	if _alive() == 0:
 		_between = true
 		_between_timer = WAVE_DELAY
+		wave_cleared.emit()
 
 
 ## Begin spawning a wave of `count` imps; each wave drips faster than the last.
@@ -70,6 +76,7 @@ func _start_wave(count: int) -> void:
 	_to_spawn = count
 	_spawn_interval = maxf(SPAWN_INTERVAL_MIN, SPAWN_INTERVAL_1 * pow(SPAWN_SPEEDUP, _wave - 1))
 	_spawn_timer = 0.0           # first imp portals in right away
+	wave_started.emit(_wave)
 
 
 ## Count of live imps still in the wave.
@@ -89,6 +96,7 @@ func _spawn_one() -> void:
 	imp.max_hp = ImpScript.BASE_HP + float(_wave - 1) * HP_PER_WAVE
 	imp.hp = imp.max_hp
 	imp.attack_damage = ImpScript.BASE_ATTACK_DAMAGE + float(_wave - 1) * ATTACK_DMG_PER_WAVE
+	imp.xp_value = ImpScript.BASE_XP + float(_wave - 1) * XP_PER_WAVE
 	imp.position = pt
 	add_child(imp)
 	imp.emerge(EMERGE_TIME)      # frozen + scaling up while the portal is open
@@ -97,6 +105,7 @@ func _spawn_one() -> void:
 	portal.position = pt
 	portal.imp = imp             # if this imp dies before emerging, the portal fails
 	add_child(portal)
+	imp_spawned.emit(imp)
 
 
 ## A random point on the island — inside the coast, away from the centre.

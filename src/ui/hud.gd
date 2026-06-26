@@ -4,7 +4,10 @@ extends CanvasLayer
 ##   * XP bar    — thin ember-gold strip pinned to the top edge
 ##   * Portrait  — small animated 3D marine in an ember-framed box (its own
 ##                 SubViewport, idle sway + bob)
-##   * LV badge  — on the portrait's bottom-right corner
+##   * LV badge  — circular level medallion on the portrait's bottom-right corner
+##   * LVL UP    — a stack of up-arrow medals under the HP bar (one per level gained this
+##                 wave) + a centred "LEVEL UP!" banner on level-up
+##   * Wave      — "WAVE N" readout centred at the top
 ##   * HP bar    — crimson, to the right of the portrait, with "hp / max" text
 ## Binds to a PlayerStats via signals; set `stats` before adding to the tree.
 ## Reuses the pause-menu ember palette + the Oswald default font for consistency.
@@ -24,6 +27,8 @@ const MARGIN := 12
 const XP_HEIGHT := 10
 const PORTRAIT := 116
 const HP_SIZE := Vector2(360, 40)
+const LVLUP_MAX := 10       # cap the level-up medal stack so it can't overflow
+const LVLUP_STACK_OFFSET := 10   # px each stacked medal is shifted right of the one below
 
 # Portrait framing — a face/mug shot aimed at the rig's Head bone. Distances are
 # fractions of head height so it stays framed whatever the model's scale.
@@ -39,7 +44,11 @@ var stats: Node             # PlayerStats; set before add_child
 var _hp: ProgressBar
 var _hp_label: Label
 var _xp: ProgressBar
-var _lv: Label
+var _lv: Label              # the number inside the medallion
+var _lv_badge: Panel        # circular level medallion (overlaps the portrait corner)
+var _wave_label: Label      # "WAVE N", top-centre
+var _lvlup_stack: Control   # per-wave level-up medals, stacked under the HP bar
+var _level_shown := 0       # last level drawn; distinguishes init from a real level-up
 var _portrait: Node3D
 var _t := 0.0
 
@@ -72,6 +81,9 @@ func _build() -> void:
 	_build_xp(root)
 	_build_portrait(root)
 	_build_hp(root)
+	_build_level_badge(root)
+	_build_wave_label(root)
+	_build_lvlup_stack(root)
 
 
 func _build_xp(root: Control) -> void:
@@ -130,21 +142,6 @@ func _build_portrait(root: Control) -> void:
 	fill.rotation_degrees = Vector3(-15.0, 35.0, 0.0)
 	sv.add_child(fill)
 
-	_lv = Label.new()
-	_lv.text = "LV 1"
-	_lv.add_theme_font_size_override("font_size", 22)
-	_lv.add_theme_color_override("font_color", EMBER)
-	_lv.add_theme_color_override("font_shadow_color", Color(0.0, 0.0, 0.0, 0.9))
-	_lv.add_theme_constant_override("shadow_offset_x", 2)
-	_lv.add_theme_constant_override("shadow_offset_y", 2)
-	_lv.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	_lv.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
-	_lv.offset_top = -30
-	_lv.offset_bottom = -3
-	_lv.offset_right = -8
-	_lv.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	panel.add_child(_lv)
-
 
 ## Aim the portrait camera at the rig's Head bone for a face close-up. Reads the
 ## real bone position (correct at any model scale); falls back to FALLBACK_HEAD if
@@ -166,7 +163,7 @@ func _frame_face(cam: Camera3D) -> void:
 func _build_hp(root: Control) -> void:
 	_hp = ProgressBar.new()
 	_hp.show_percentage = false
-	_hp.position = Vector2(MARGIN + PORTRAIT + MARGIN, XP_HEIGHT + MARGIN + 38)
+	_hp.position = Vector2(MARGIN + PORTRAIT + MARGIN, XP_HEIGHT + MARGIN)
 	_hp.size = HP_SIZE
 	_hp.custom_minimum_size = HP_SIZE
 	_hp.add_theme_stylebox_override("background", _flat(TRACK_BG, EMBER_DIM, 2, 4))
@@ -186,6 +183,147 @@ func _build_hp(root: Control) -> void:
 	_hp.add_child(_hp_label)
 
 
+## Level medallion: a circular ember-ringed badge overlapping the portrait's bottom-right
+## corner, with the level number, plus the per-wave LVL UP badge column overlaid on the
+## portrait's upper area (clear of the HP bar to the portrait's right).
+func _build_level_badge(root: Control) -> void:
+	var sz := 52
+	_lv_badge = Panel.new()
+	_lv_badge.size = Vector2(sz, sz)
+	_lv_badge.position = Vector2(
+		MARGIN + PORTRAIT - sz + 14,
+		XP_HEIGHT + MARGIN + PORTRAIT - sz + 14)   # overlap the panel's bottom-right corner
+	_lv_badge.pivot_offset = Vector2(sz, sz) * 0.5   # punch scales from the centre
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = PANEL_BG
+	sb.border_color = EMBER
+	sb.set_border_width_all(3)
+	sb.set_corner_radius_all(sz / 2)                 # full radius -> circle
+	_lv_badge.add_theme_stylebox_override("panel", sb)
+	_lv_badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.add_child(_lv_badge)
+
+	_lv = Label.new()
+	_lv.text = "1"
+	_lv.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_lv.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_lv.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_lv.add_theme_font_size_override("font_size", 30)
+	_lv.add_theme_color_override("font_color", EMBER)
+	_lv.add_theme_color_override("font_shadow_color", Color(0.0, 0.0, 0.0, 0.9))
+	_lv.add_theme_constant_override("shadow_offset_x", 2)
+	_lv.add_theme_constant_override("shadow_offset_y", 2)
+	_lv.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_lv_badge.add_child(_lv)
+
+
+## "WAVE N" readout, centred along the top edge just under the XP strip.
+func _build_wave_label(root: Control) -> void:
+	_wave_label = Label.new()
+	_wave_label.text = "WAVE 1"
+	_wave_label.set_anchors_preset(Control.PRESET_TOP_WIDE)
+	_wave_label.offset_top = XP_HEIGHT + 4
+	_wave_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_wave_label.add_theme_font_size_override("font_size", 26)
+	_wave_label.add_theme_color_override("font_color", EMBER)
+	_wave_label.add_theme_color_override("font_shadow_color", Color(0.0, 0.0, 0.0, 0.9))
+	_wave_label.add_theme_constant_override("shadow_offset_x", 2)
+	_wave_label.add_theme_constant_override("shadow_offset_y", 2)
+	_wave_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.add_child(_wave_label)
+
+
+## A stack of medals under the HP bar — one per level gained this wave (cleared at wave start).
+func _build_lvlup_stack(root: Control) -> void:
+	_lvlup_stack = Control.new()
+	_lvlup_stack.position = Vector2(
+		MARGIN + PORTRAIT + MARGIN,                          # align with the HP bar's left edge
+		XP_HEIGHT + MARGIN + int(HP_SIZE.y) + 8)             # just under the HP bar
+	_lvlup_stack.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.add_child(_lvlup_stack)
+
+
+## Pop an up-arrow medal onto the stack under the HP bar (newest on top, shifted right).
+func _add_lvlup_medal() -> void:
+	var i := _lvlup_stack.get_child_count()
+	if i >= LVLUP_MAX:
+		return
+	var sz := 34
+	var medal := Panel.new()
+	medal.size = Vector2(sz, sz)
+	medal.position = Vector2(i * LVLUP_STACK_OFFSET, 0.0)   # overlapping pile, fanned right
+	medal.pivot_offset = Vector2(sz, sz) * 0.5
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = XP_FILL
+	sb.border_color = EMBER
+	sb.set_border_width_all(3)
+	sb.set_corner_radius_all(sz / 2)
+	medal.add_theme_stylebox_override("panel", sb)
+	medal.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_lvlup_stack.add_child(medal)
+
+	var arrow := Polygon2D.new()                           # an up-arrow stamped on the medal
+	arrow.color = Color(0.15, 0.04, 0.0)
+	arrow.position = Vector2(sz, sz) * 0.5
+	arrow.polygon = PackedVector2Array([
+		Vector2(0.0, -8.0), Vector2(8.0, 4.0), Vector2(3.0, 4.0),
+		Vector2(3.0, 9.0), Vector2(-3.0, 9.0), Vector2(-3.0, 4.0), Vector2(-8.0, 4.0)])
+	medal.add_child(arrow)
+
+	medal.scale = Vector2(0.2, 0.2)
+	medal.modulate.a = 0.0
+	var tw := medal.create_tween().set_parallel(true)
+	tw.tween_property(medal, "scale", Vector2.ONE, 0.3).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tw.tween_property(medal, "modulate:a", 1.0, 0.2)
+
+
+## Splashy centred "LEVEL UP!" banner that pops, holds, and fades — the main flourish.
+func _play_levelup_effect() -> void:
+	var b := Label.new()
+	b.text = "LEVEL UP!"
+	b.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	b.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	b.add_theme_font_size_override("font_size", 56)
+	b.add_theme_color_override("font_color", XP_FILL)
+	b.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 0.95))
+	b.add_theme_constant_override("outline_size", 8)
+	b.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var vp := get_viewport().get_visible_rect().size
+	b.size = Vector2(vp.x, 80.0)                  # full-width band -> centred text is screen-centred
+	b.position = Vector2(0.0, vp.y * 0.30)
+	b.pivot_offset = Vector2(vp.x * 0.5, 40.0)
+	get_child(0).add_child(b)                     # the full-rect root Control
+	b.scale = Vector2(0.6, 0.6)
+	var tw := b.create_tween()
+	tw.tween_property(b, "scale", Vector2(1.15, 1.15), 0.22).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tw.tween_interval(0.25)
+	tw.tween_property(b, "modulate:a", 0.0, 0.6).set_ease(Tween.EASE_IN)
+	tw.tween_callback(b.queue_free)
+
+
+## Scale-punch the medallion on a level-up.
+func _punch_badge() -> void:
+	_lv_badge.scale = Vector2(1.4, 1.4)
+	var tw := _lv_badge.create_tween()
+	tw.tween_property(_lv_badge, "scale", Vector2.ONE, 0.25).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+
+
+## Clear the level-up medal stack — called when the level-up menu is closed, so the
+## medal disappears once the player has acknowledged the level-up.
+func clear_levelup_medals() -> void:
+	if _lvlup_stack != null:
+		for m in _lvlup_stack.get_children():
+			m.queue_free()
+
+
+## A new wave began — update the WAVE readout and reset the per-wave LVL UP counter.
+## Wired to WaveSpawner.wave_started.
+func on_wave_started(wave: int) -> void:
+	if _wave_label != null:
+		_wave_label.text = "WAVE %d" % wave
+	clear_levelup_medals()
+
+
 func _on_health(hp: float, max_hp: float) -> void:
 	_hp.max_value = max_hp
 	_hp.value = hp
@@ -198,7 +336,13 @@ func _on_xp(xp: float, to_next: float) -> void:
 
 
 func _on_level(level: int) -> void:
-	_lv.text = "LV %d" % level
+	_lv.text = str(level)
+	if _level_shown > 0 and level > _level_shown:    # a real level-up (not the initial bind)
+		_punch_badge()
+		for _lvl in (level - _level_shown):
+			_add_lvlup_medal()
+		_play_levelup_effect()
+	_level_shown = level
 
 
 ## A StyleBoxFlat with optional border + corner radius.

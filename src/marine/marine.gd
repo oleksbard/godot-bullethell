@@ -26,6 +26,7 @@ signal died                  # emitted once when health hits 0 (Main shows the g
 const IslandShape := preload("res://src/lib/island_shape.gd")
 const ImpScript := preload("res://src/enemies/imp.gd")
 const DamageNumberScript := preload("res://src/fx/damage_number.gd")
+const BlobShadow := preload("res://src/fx/blob_shadow.gd")
 const MODEL: PackedScene = preload("res://models/marine_01.glb")
 
 const SPEED := 6.0
@@ -84,6 +85,7 @@ var _walk_phase := 0.0
 var _walk_amt := 0.0
 
 var stats: Node                        # PlayerStats holding health/xp; set by Main
+var inventory: Node                    # Inventory holding the grid loadout; set by Main
 var _alive := true
 var _flash_mats: Array[StandardMaterial3D] = []   # duplicated model materials we pulse white on hit
 var _flash := 0.0                      # seconds left of the hurt-flash
@@ -172,6 +174,14 @@ func take_damage(amount: float) -> void:
 		stats.take_damage(amount)
 		if stats.health <= 0.0:
 			_die()
+
+
+## Award XP from a collected loot orb — forwards to PlayerStats (which fills the HUD
+## bar and may emit `leveled_up`). No-op once dead or before stats are set.
+func gain_xp(amount: float) -> void:
+	if not _alive or stats == null:
+		return
+	stats.add_xp(amount)
 
 
 ## Health hit 0: stop combat, flash, topple over, and tell Main (which raises the

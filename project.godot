@@ -1,8 +1,12 @@
-config_version=5
+; Engine configuration file.
+; It's best edited using the editor UI and not directly,
+; since the parameters that go here are not all obvious.
+;
+; Format:
+;   [section] ; section goes between []
+;   param=value ; assign values to parameters
 
-; Hell Marine — a 3D top-down arena survival shooter (Doom x Brotato x loot).
-; Iteration 1: marine + procedural hell island + WASD movement.
-; Open this folder in Godot 4.7 and run, or use ./play.sh / ./edit.sh.
+config_version=5
 
 [application]
 
@@ -17,12 +21,4 @@ window/size/viewport_height=720
 
 [gui]
 
-; Oswald (OFL) as the default font for every Control — see fonts/OFL.txt.
 theme/custom_font="res://fonts/Oswald.ttf"
-
-[rendering]
-
-; Forward+ for the full post stack (ACES tonemap, glow/bloom, SSAO) the hellish
-; look leans on — same renderer as the sibling prototype.
-renderer/rendering_method="forward_plus"
-renderer/rendering_method.mobile="mobile"

@@ -5,19 +5,25 @@ extends Node3D
 ## and within ATTACK_RANGE plays a forward-jab attack pose (no damage yet). Registers
 ## in the "imps" group so weapons can target it and the off-screen indicator finds it.
 
+signal died(world_pos: Vector3, xp_value: float)   # for the XP-orb field; emitted once on death
+
 const Gore := preload("res://src/fx/gore.gd")
 const DamageNumberScript := preload("res://src/fx/damage_number.gd")
+const BlobShadow := preload("res://src/fx/blob_shadow.gd")
+const IslandShape := preload("res://src/lib/island_shape.gd")
 const MODEL: PackedScene = preload("res://models/imp_opt.glb")
 const ANIM_SHADER: Shader = preload("res://src/enemies/imp_anim.gdshader")
 
 const GROUP := "imps"
 const SPEED := 2.3           # drift toward the player (set 0 for static)
+const EDGE_MARGIN := 0.6     # keep the imp this far inside the coast (can't chase onto the void)
 const STOP_DIST := 0.8       # don't climb onto the player
 const SEP_RADIUS := 1.2      # personal space — push apart inside this
 const SEP_WEIGHT := 1.6      # how hard separation overrides the pull to the player
 const BODY_COLOR := Color(0.45, 0.08, 0.08)   # blood/gib tint + albedo fallback if the model has no texture
 const EMERGE_SCALE_FROM := 0.2   # materializes up from this scale while in the portal
 const BASE_HP := 3.0             # wave-1 HP; one pistol bolt (dmg 5) one-shots it. Spawner scales it up per wave.
+const BASE_XP := 1.0             # wave-1 XP value; the spawner scales it up per wave
 
 # Model fitting + animation tuning (the glb's scale/orientation are unknown, so fit it).
 const IMP_HEIGHT := 1.3      # model auto-scaled so its height = this (world units)
@@ -51,6 +57,7 @@ var player: Node3D
 var max_hp := BASE_HP
 var hp := BASE_HP                # set by the spawner per wave; depleted by take_damage()
 var attack_damage := BASE_ATTACK_DAMAGE   # damage per melee hit; spawner scales per wave
+var xp_value := BASE_XP          # XP this imp grants when killed; spawner scales per wave
 var _attack_cd := 0.0            # cooldown until this imp can hit the player again
 var _dead := false
 var _emerge := 0.0               # seconds left frozen in the spawn portal
@@ -77,6 +84,7 @@ func die(blood_spatters: int = 3, hit_dir: Vector3 = Vector3.ZERO) -> void:
 		return                          # guard: two bolts can land the same frame
 	_dead = true
 	remove_from_group(GROUP)            # stop other guns/bolts targeting a corpse
+	died.emit(global_position, xp_value)   # the orb field drops an XP orb here
 	Gore.spawn_death(get_parent(), global_position, BODY_COLOR, blood_spatters, hit_dir)
 	_spawn_corpse()                     # detach the body to crumple + sink on its own
 	queue_free()
@@ -174,6 +182,8 @@ func _process(delta: float) -> void:
 		global_position += _knock * delta
 		_knock = _knock.move_toward(Vector3.ZERO, KNOCKBACK_DAMP * delta)
 
+	_clamp_to_island()                   # both the chase and the knockback stay on solid rock
+
 	if to_player.length() > 0.05:
 		rotation.y = atan2(-to_player.x, -to_player.z)   # always face the player (-Z forward)
 
@@ -189,6 +199,20 @@ func _process(delta: float) -> void:
 		_attack_cd = ATTACK_COOLDOWN
 		if player.has_method("take_damage"):
 			player.take_damage(attack_damage)
+
+
+## Keep the imp inside the coastline so it can't chase (or get knocked) onto the
+## void. Same IslandShape the mesh is built from, in world space (the imp steers via
+## global_position) — matches the marine's edge clamp and the visible edge exactly.
+func _clamp_to_island() -> void:
+	var flat := Vector2(global_position.x, global_position.z)
+	if flat.length() < 0.001:
+		return
+	var max_r: float = IslandShape.radius(atan2(global_position.z, global_position.x)) - EDGE_MARGIN
+	if flat.length() > max_r:
+		var clamped := flat.normalized() * max_r
+		global_position.x = clamped.x
+		global_position.z = clamped.y      # flat is Vector2(x, z) — .y holds world Z
 
 
 ## Decay the white hurt-flash and push it to the shader (0 when not flashing).
@@ -224,6 +248,7 @@ func _build_model() -> void:
 	add_child(model)
 	_fit_model(model)
 	_model = model
+	add_child(BlobShadow.make(0.7))   # cheap fake shadow; the swarm skips real shadow casting (below)
 
 	var fdir := Vector3(0.0, 0.0, -1.0).rotated(Vector3.UP, -MODEL_YAW)   # node-forward, in mesh-local space
 	for mi in model.find_children("*", "MeshInstance3D", true, false):
@@ -248,6 +273,7 @@ func _build_model() -> void:
 		mat.set_shader_parameter("eye_radius", EYE_RADIUS)
 		mat.set_shader_parameter("eye_emission", Vector3(EYE_COLOR.r, EYE_COLOR.g, EYE_COLOR.b))
 		mat.set_shader_parameter("eye_energy", EYE_ENERGY)
+		mesh_inst.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF   # swarm uses the blob, not a shadow-map pass
 		mesh_inst.material_override = mat
 		_anim_mats.append(mat)
 

@@ -19,6 +19,14 @@ const ProjectileScript := preload("res://src/fx/projectile.gd")
 const GunScript := preload("res://src/weapons/gun.gd")
 const ShotSfxScript := preload("res://src/audio/shot_sfx.gd")
 const ImpactSfxScript := preload("res://src/audio/impact_sfx.gd")
+const XpOrbScript := preload("res://src/loot/xp_orb.gd")
+const XpOrbFieldScript := preload("res://src/loot/xp_orb_field.gd")
+const InventoryItemScript := preload("res://src/inventory/inventory_item.gd")
+const InventoryGridScript := preload("res://src/inventory/inventory_grid.gd")
+const InventoryScript := preload("res://src/inventory/inventory.gd")
+const GridViewScript := preload("res://src/ui/grid_view.gd")
+const LevelUpMenuScript := preload("res://src/ui/level_up_menu.gd")
+const HudScript := preload("res://src/ui/hud.gd")
 
 var _passed := 0
 var _failed := 0
@@ -28,6 +36,10 @@ var _suite := ""
 func _initialize() -> void:
 	print("── running tests ──")
 	_test_island_shape()
+	_test_inventory_item()
+	_test_inventory_grid()
+	_test_inventory()
+	_test_grid_view()
 	_test_marine_clamp()
 	await _test_marine_model()
 	await _test_marine_faces_enemy()
@@ -37,20 +49,28 @@ func _initialize() -> void:
 	await _test_weapon_ring()
 	await _test_imp_die()
 	await _test_imp_take_damage()
+	await _test_imp_xp_drop()
+	await _test_xp_orb()
+	await _test_xp_orb_field()
 	await _test_imp_hit_react()
 	await _test_imp_emerge()
 	await _test_player_damage()
+	await _test_marine_gain_xp()
 	await _test_imp_attack()
 	await _test_portal_fail()
 	await _test_projectile_kills()
 	await _test_wave_progression()
+	await _test_wave_signals()
 	await _test_gun_range()
+	await _test_weapon_ring_inventory()
 	_test_arm_splay()
 	await _test_imp_separation()
 	await _test_projectile_hits_path()
 	await _test_projectile_misses()
 	await _test_shot_sfx()
 	await _test_impact_sfx()
+	await _test_level_up_menu()
+	await _test_hud_clear_medals()
 	print("──")
 	print("%d passed, %d failed" % [_passed, _failed])
 	quit(1 if _failed > 0 else 0)
@@ -274,6 +294,116 @@ func _test_imp_take_damage() -> void:
 	holder.free()
 
 
+func _test_imp_xp_drop() -> void:
+	_suite = "Imp.xp"
+	var holder := Node3D.new()
+	get_root().add_child(holder)
+	var imp: Node3D = ImpScript.new()
+	imp.xp_value = 9.0
+	holder.add_child(imp)
+	await process_frame
+	var got := [Vector3.ZERO, -1.0]                  # [pos, xp]
+	imp.died.connect(func(pos: Vector3, xp: float) -> void: got[0] = pos; got[1] = xp)
+	imp.global_position = Vector3(3.0, 0.0, 1.0)
+	imp.die()
+	_ok(is_equal_approx(got[1], 9.0), "imp emits its xp_value on death (%.1f)" % got[1])
+	_ok(got[0].is_equal_approx(Vector3(3.0, 0.0, 1.0)), "imp emits its death position")
+	await process_frame                              # let the queued free run
+	holder.free()
+
+
+func _test_xp_orb() -> void:
+	_suite = "XpOrb"
+	var holder := Node3D.new()
+	get_root().add_child(holder)
+	var player := Node3D.new()
+	holder.add_child(player)                          # at origin
+
+	# In magnet range -> flies toward the marine.
+	var orb: Node3D = XpOrbScript.new()
+	orb.player = player
+	holder.add_child(orb)
+	orb.set_process(false)
+	orb.global_position = Vector3(2.0, 0.5, 0.0)      # dist 2 < MAGNET, > COLLECT
+	await process_frame
+	var d0 := orb.global_position.distance_to(player.global_position)
+	for i in 5:
+		orb._process(0.05)
+	var d1 := orb.global_position.distance_to(player.global_position)
+	_ok(d1 < d0 - 0.1, "an orb within magnet range flies toward the marine (%.2f -> %.2f)" % [d0, d1])
+	orb.free()
+
+	# Out of magnet range -> stays put; vacuum() overrides that.
+	var orb2: Node3D = XpOrbScript.new()
+	orb2.player = player
+	holder.add_child(orb2)
+	orb2.set_process(false)
+	orb2.global_position = Vector3(10.0, 0.5, 0.0)    # dist 10 > MAGNET
+	await process_frame
+	var e0 := orb2.global_position.distance_to(player.global_position)
+	for i in 5:
+		orb2._process(0.05)
+	var e1 := orb2.global_position.distance_to(player.global_position)
+	_ok(absf(e1 - e0) < 0.1, "an orb beyond magnet range stays put (%.2f -> %.2f)" % [e0, e1])
+	orb2.vacuum()
+	for i in 5:
+		orb2._process(0.05)
+	var e2 := orb2.global_position.distance_to(player.global_position)
+	_ok(e2 < e0 - 0.1, "vacuum() pulls a far orb toward the marine (%.2f)" % e2)
+	orb2.free()
+
+	# Within collect range -> credits XP once and frees itself.
+	var m: Node3D = MarineScript.new()
+	holder.add_child(m)
+	var st: Node = PlayerStatsScript.new()
+	st.xp = 0.0
+	st.xp_to_next = 100.0
+	m.add_child(st)
+	m.stats = st
+	await process_frame
+	var orb3: Node3D = XpOrbScript.new()
+	orb3.player = m
+	orb3.xp_value = 5.0
+	holder.add_child(orb3)
+	orb3.set_process(false)
+	orb3.global_position = m.global_position + Vector3(0.3, 0.0, 0.0)   # within COLLECT
+	await process_frame
+	orb3._process(0.05)
+	_ok(orb3.is_queued_for_deletion(), "an orb within collect range is collected (freed)")
+	_ok(is_equal_approx(st.xp, 5.0), "collecting an orb credits the player's XP (%.1f)" % st.xp)
+	holder.free()
+
+
+func _test_xp_orb_field() -> void:
+	_suite = "XpOrbField"
+	var holder := Node3D.new()
+	get_root().add_child(holder)
+	var player := Node3D.new()
+	holder.add_child(player)
+	var field: Node3D = XpOrbFieldScript.new()
+	field.player = player
+	holder.add_child(field)
+
+	var imp: Node3D = ImpScript.new()
+	imp.xp_value = 4.0
+	holder.add_child(imp)
+	await process_frame
+	field.on_imp_spawned(imp)                         # what Main wires to spawner.imp_spawned
+
+	var before := field.get_child_count()
+	imp.global_position = Vector3(2.0, 0.0, 0.0)
+	imp.die()                                         # emits died -> field.drop_orb
+	_ok(field.get_child_count() == before + 1, "a tracked imp's death drops one orb into the field")
+
+	var orb := field.get_child(field.get_child_count() - 1)
+	orb.set_process(false)
+	field.vacuum_all()
+	_ok(orb._vacuum, "vacuum_all() flags every orb to fly in")
+
+	await process_frame
+	holder.free()
+
+
 func _test_imp_hit_react() -> void:
 	_suite = "Imp.hit"
 	var holder := Node3D.new()
@@ -341,6 +471,42 @@ func _test_wave_progression() -> void:
 	_ok(get_nodes_in_group("imps").size() == 30, "next wave doubles to 30 (got %d)" % get_nodes_in_group("imps").size())
 	_ok(sp._spawn_interval < w1_interval,
 		"wave 2 drips faster than wave 1 (%.2f < %.2f s)" % [sp._spawn_interval, w1_interval])
+
+	await process_frame
+	holder.free()
+
+
+func _test_wave_signals() -> void:
+	_suite = "WaveSpawner.signals"
+	var holder := Node3D.new()
+	get_root().add_child(holder)
+	var sp: Node3D = WaveSpawnerScript.new()
+	sp.player = Node3D.new()
+	holder.add_child(sp.player)
+
+	var started := [0]
+	var spawned := [0]
+	var cleared := [0]
+	var first_xp := [-1.0]
+	sp.wave_started.connect(func(w: int) -> void: started[0] = w)
+	sp.imp_spawned.connect(func(imp: Node) -> void:
+		spawned[0] += 1
+		if first_xp[0] < 0.0:
+			first_xp[0] = imp.xp_value)
+	sp.wave_cleared.connect(func() -> void: cleared[0] += 1)
+
+	holder.add_child(sp)                              # _ready -> _start_wave(15) -> wave_started(1)
+	_ok(started[0] == 1, "wave_started fires with wave 1 on ready (got %d)" % started[0])
+
+	_pump_spawn(sp, 15)
+	_ok(spawned[0] == 15, "imp_spawned fires once per spawned imp (got %d)" % spawned[0])
+	_ok(is_equal_approx(first_xp[0], ImpScript.BASE_XP),
+		"a wave-1 imp carries BASE_XP (%.1f)" % first_xp[0])
+
+	for imp in get_nodes_in_group("imps"):
+		imp.die()
+	sp._process(0.1)                                  # notices the field is clear
+	_ok(cleared[0] == 1, "wave_cleared fires when the field clears (got %d)" % cleared[0])
 
 	await process_frame
 	holder.free()
@@ -421,6 +587,23 @@ func _test_player_damage() -> void:
 	holder.free()
 
 
+func _test_marine_gain_xp() -> void:
+	_suite = "Marine.gain_xp"
+	var holder := Node3D.new()
+	get_root().add_child(holder)
+	var m: Node3D = MarineScript.new()
+	holder.add_child(m)
+	var stats: Node = PlayerStatsScript.new()
+	stats.xp = 0.0
+	stats.xp_to_next = 100.0          # high so add_xp(7) doesn't wrap into a level-up
+	m.add_child(stats)
+	m.stats = stats
+	await process_frame               # _ready builds the model
+	m.gain_xp(7.0)
+	_ok(is_equal_approx(stats.xp, 7.0), "gain_xp credits PlayerStats XP (%.1f)" % stats.xp)
+	holder.free()
+
+
 func _test_imp_attack() -> void:
 	_suite = "Imp.attack"
 	var holder := Node3D.new()
@@ -470,6 +653,30 @@ func _test_gun_range() -> void:
 	_ok(wr._guns[0]._target == near, "the in-range closest imp is targeted")
 	_ok(wr._guns[0]._target != far and wr._guns[1]._target != far,
 		"the out-of-range imp is never targeted")
+	holder.free()
+
+
+func _test_weapon_ring_inventory() -> void:
+	_suite = "WeaponRing.inventory"
+	var holder := Node3D.new()
+	get_root().add_child(holder)
+	var m: Node3D = MarineScript.new()
+	holder.add_child(m)
+	var inv: Node = InventoryScript.build()
+	m.add_child(inv)
+	m.inventory = inv
+	var wr: Node3D = WeaponRingScript.new()
+	wr.player = m
+	holder.add_child(wr)
+	await process_frame
+	_ok(wr._guns.size() == 2, "ring builds 2 guns from the 2 equipped pistols (got %d)" % wr._guns.size())
+
+	var p: Object = inv.equipped_pistols()[0]
+	inv.pick_up(inv.backpack, p)                 # unequip one -> changed -> rebuild
+	_ok(wr._guns.size() == 1, "removing a backpack pistol drops a gun (got %d)" % wr._guns.size())
+
+	inv.drop(inv.stash, p, Vector2i(0, 0))       # parked in the stash: still unequipped
+	_ok(wr._guns.size() == 1, "a stashed pistol stays unequipped (got %d)" % wr._guns.size())
 	holder.free()
 
 
@@ -602,6 +809,150 @@ func _test_impact_sfx() -> void:
 	s.play()                             # must not error even with no audio device
 	_ok(true, "play() runs without error")
 	s.free()
+
+
+func _test_inventory_item() -> void:
+	_suite = "InventoryItem"
+	var p := InventoryItemScript.pistol()
+	_ok(p.kind == InventoryItemScript.Kind.PISTOL, "pistol() is a PISTOL")
+	_ok(_sorted_cells(p.cells()) == _sorted_cells([
+		Vector2i(0, 0), Vector2i(0, 1), Vector2i(0, 2), Vector2i(1, 2)]),
+		"rot 0 is the base L (X./X./XX)")
+
+	p.rot = 2
+	_ok(_sorted_cells(p.cells()) == _sorted_cells([
+		Vector2i(0, 0), Vector2i(1, 0), Vector2i(1, 1), Vector2i(1, 2)]),
+		"rot 2 (180) is the right-hand pistol (XX/.X/.X)")
+
+	# All four rotations are 4 cells and distinct shapes.
+	var shapes := {}
+	for r in 4:
+		p.rot = r
+		_ok(p.cells().size() == 4, "rot %d keeps 4 cells" % r)
+		shapes[str(_sorted_cells(p.cells()))] = true
+	_ok(shapes.size() == 4, "the four rotations are distinct (%d)" % shapes.size())
+
+
+func _test_inventory_grid() -> void:
+	_suite = "InventoryGrid"
+	# The backpack shape: _OO_ / OOOO / OOOO / OOOO
+	var cells: Array[Vector2i] = [
+		Vector2i(1, 0), Vector2i(2, 0),
+		Vector2i(0, 1), Vector2i(1, 1), Vector2i(2, 1), Vector2i(3, 1),
+		Vector2i(0, 2), Vector2i(1, 2), Vector2i(2, 2), Vector2i(3, 2),
+		Vector2i(0, 3), Vector2i(1, 3), Vector2i(2, 3), Vector2i(3, 3)]
+	var g := InventoryGridScript.from_cells(cells)
+
+	var left := InventoryItemScript.pistol()           # rot 0 down the left column
+	_ok(g.fits(left, Vector2i(0, 1)), "left pistol fits at (0,1)")
+	_ok(not g.fits(left, Vector2i(0, 0)), "pistol at (0,0) hits the top-row hole -> rejected")
+	_ok(not g.fits(left, Vector2i(3, 1)), "pistol off the right edge -> rejected")
+
+	g.place(left, Vector2i(0, 1))
+	_ok(g.item_at(Vector2i(0, 1)) == left, "place records occupancy")
+
+	var right := InventoryItemScript.pistol()
+	right.rot = 2                                       # 180° L down the right column
+	_ok(g.fits(right, Vector2i(2, 1)), "right pistol fits at (2,1) beside the left one")
+	g.place(right, Vector2i(2, 1))
+	_ok(g.items_in_reading_order().size() == 2, "two distinct items placed")
+
+	var extra := InventoryItemScript.pistol()
+	_ok(not g.fits(extra, Vector2i(0, 1)), "overlapping an existing item -> rejected")
+	_ok(g.fits(left, Vector2i(0, 1), left), "an item fits over its own cells (ignore=self)")
+
+	g.remove(left)
+	_ok(g.item_at(Vector2i(0, 1)) == null, "remove clears occupancy")
+	_ok(g.items_in_reading_order().size() == 1, "one item left after remove")
+
+
+func _test_inventory() -> void:
+	_suite = "Inventory"
+	var inv: Node = InventoryScript.build()
+	_ok(inv.backpack.items_in_reading_order().size() == 2, "starts with 2 items in the backpack")
+	_ok(inv.equipped_pistols().size() == 2, "both starting pistols are equipped")
+	# Exact starting placement matches the spec layout.
+	_ok(inv.backpack.item_at(Vector2i(0, 1)) != null and inv.backpack.item_at(Vector2i(1, 3)) != null,
+		"left pistol occupies the left column + foot")
+	_ok(inv.backpack.item_at(Vector2i(2, 1)) != null and inv.backpack.item_at(Vector2i(3, 3)) != null,
+		"right pistol occupies the right column + head")
+
+	var changes := [0]
+	inv.changed.connect(func(): changes[0] += 1)
+
+	var left: Object = inv.equipped_pistols()[0]
+	inv.pick_up(inv.backpack, left)
+	_ok(inv.equipped_pistols().size() == 1, "picking a pistol out of the backpack unequips it")
+	_ok(changes[0] == 1, "pick_up emits changed")
+
+	_ok(inv.drop(inv.stash, left, Vector2i(0, 0)), "the pistol drops into the stash")
+	_ok(inv.equipped_pistols().size() == 1, "a stashed pistol is still unequipped")
+	_ok(changes[0] == 2, "drop emits changed")
+
+	inv.free()
+
+
+func _test_grid_view() -> void:
+	_suite = "GridView"
+	var gv: Control = GridViewScript.new()
+	var step := GridViewScript.CELL + GridViewScript.GAP
+	_ok(gv.cell_at(Vector2(5, 5)) == Vector2i(0, 0), "top-left pixels map to cell (0,0)")
+	_ok(gv.cell_at(Vector2(step + 5, 5)) == Vector2i(1, 0), "one step right maps to cell (1,0)")
+	_ok(gv.cell_at(Vector2(5, step * 2 + 5)) == Vector2i(0, 2), "two steps down maps to cell (0,2)")
+	_ok(gv.cell_origin(Vector2i(2, 1)).is_equal_approx(Vector2(step * 2, step)),
+		"cell_origin returns the cell's top-left pixel")
+	gv.free()
+
+
+func _test_level_up_menu() -> void:
+	_suite = "LevelUpMenu"
+	var inv: Node = InventoryScript.build()
+	var menu: CanvasLayer = LevelUpMenuScript.new()
+	menu.inventory = inv
+	get_root().add_child(menu)
+	await process_frame                       # _ready builds the UI
+
+	menu.open(2)
+	_ok(paused and menu.visible, "open() pauses the tree and shows the menu")
+	menu.open(3)
+	_ok(menu._open, "open() is idempotent while already open")
+	menu.close()
+	_ok(not paused and not menu.visible, "close() unpauses and hides")
+
+	# Held items are never lost: pick one up, then close returns it to its origin.
+	menu.open(4)
+	var p: Object = inv.equipped_pistols()[0]
+	menu._begin_hold(inv.backpack, p)         # simulate a pick-up (UI click does this)
+	_ok(inv.equipped_pistols().size() == 1, "holding a pistol unequips it")
+	menu.close()
+	_ok(inv.equipped_pistols().size() == 2, "close() returns the held pistol -> re-equipped")
+	paused = false                            # safety: ensure unpaused for later tests
+	menu.free()
+	inv.free()
+
+
+func _test_hud_clear_medals() -> void:
+	_suite = "Hud.medals"
+	var stats: Node = PlayerStatsScript.new()
+	var hud: CanvasLayer = HudScript.new()
+	hud.stats = stats
+	get_root().add_child(hud)
+	await process_frame                       # _ready builds the HUD
+	hud._add_lvlup_medal()
+	hud._add_lvlup_medal()
+	_ok(hud._lvlup_stack.get_child_count() == 2, "two medals on the stack")
+	hud.clear_levelup_medals()
+	await process_frame                       # let queue_free run
+	_ok(hud._lvlup_stack.get_child_count() == 0, "clear_levelup_medals empties the stack")
+	hud.free()
+	stats.free()
+
+
+## Sort a cell array by (row, col) so set-equality can use ==.
+func _sorted_cells(cells: Array) -> Array:
+	var out: Array = cells.duplicate()
+	out.sort_custom(func(a, b): return (a.y < b.y) or (a.y == b.y and a.x < b.x))
+	return out
 
 
 func _ok(condition: bool, message: String) -> void:

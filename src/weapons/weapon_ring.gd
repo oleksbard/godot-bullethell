@@ -25,9 +25,10 @@ const HELD_LIFT := 0.12      # raise the held gun a touch so it sits up in the h
 # ignored, so a gun with nothing in range simply holds fire.
 const MAX_RANGE := 12.0
 
-@export var gun_count := 2   # clamped to 1..12
+@export var gun_count := 2   # fallback when no inventory; clamped to 0..12
 
 var player: Node3D
+var _inventory: Node         # Inventory (or null -> fall back to gun_count)
 var _guns: Array[Node3D] = []
 var _mounts: Array = []      # per-gun hand mount (Node3D) or null if it floats
 var _bob := 0.0
@@ -41,18 +42,37 @@ func _ready() -> void:
 	_impact = ImpactSfxScript.new()
 	add_child(_impact)
 
-	# Held guns go in the marine's hands; the rest float. A non-marine player
-	# (e.g. tests) exposes no hands, so every gun floats.
+	# Prefer the player's inventory as the source of equipped guns; a non-marine
+	# player (e.g. tests) has no `inventory`, so we fall back to `gun_count`.
+	if player != null:
+		_inventory = player.get("inventory")
+	if _inventory != null:
+		_inventory.changed.connect(_rebuild)
+	_rebuild()
+
+
+## (Re)build the gun nodes: one per equipped pistol (or `gun_count` with no inventory).
+## The first guns go in the marine's hands (the rest float); a non-marine player has
+## no hands, so every gun floats. Called on ready and whenever the inventory changes.
+func _rebuild() -> void:
+	for g in _guns:
+		g.queue_free()
+	_guns.clear()
+	_mounts.clear()
+
 	var hands: Array = []
 	if player != null and player.has_method("get_hand_mounts"):
 		hands = player.get_hand_mounts()
 
-	gun_count = clampi(gun_count, 1, 12)
-	for i in gun_count:
+	var n := clampi(gun_count, 0, 12)
+	if _inventory != null:
+		n = clampi(_inventory.equipped_pistols().size(), 0, 12)
+
+	for i in n:
 		var g: Node3D = GunScript.new()
 		g.fired.connect(_on_gun_fired)
 		# Stagger first shots so the guns fire individually, not in lockstep.
-		g.stagger(GunScript.FIRE_INTERVAL * float(i) / float(gun_count))
+		g.stagger(GunScript.FIRE_INTERVAL * float(i) / float(maxi(n, 1)))
 		add_child(g)
 		if i < hands.size():
 			g.held = true

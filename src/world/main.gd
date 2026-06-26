@@ -17,7 +17,10 @@ const PauseMenuScript := preload("res://src/ui/pause_menu.gd")
 const PlayerStatsScript := preload("res://src/marine/player_stats.gd")
 const HudScript := preload("res://src/ui/hud.gd")
 const GameOverMenuScript := preload("res://src/ui/game_over_menu.gd")
+const XpOrbFieldScript := preload("res://src/loot/xp_orb_field.gd")
 const ScreenGradeScript := preload("res://src/fx/screen_grade.gd")
+const InventoryScript := preload("res://src/inventory/inventory.gd")
+const LevelUpMenuScript := preload("res://src/ui/level_up_menu.gd")
 
 const CAM_OFFSET := Vector3(0.0, 13.0, 7.0)
 const CAM_SIZE := 18.0             # orthographic vertical extent (smaller = closer)
@@ -33,20 +36,45 @@ func _ready() -> void:
 	_build_key_light()
 	add_child(HellIsland.build())
 
-	# preload by path (not bare class_name) so loading doesn't depend on the
-	# editor having built the global class cache — works on a cold clone / CI.
+	# preload by path (not bare class_name) so loading doesn't depend on the editor
+	# having built the global class cache — works on a cold clone / CI.
 	marine = MarineScript.new()
 	add_child(marine)
 
-	# Player stats the HUD binds to (damage/XP gain wire in later).
+	# Player stats the HUD binds to; the marine drains health and gains XP through it.
 	var stats := PlayerStatsScript.new()
-	stats.xp = 4.0           # placeholder partial XP so the bar reads as alive
 	marine.add_child(stats)
-	marine.stats = stats     # the marine drains this on imp hits, dies at 0
+	marine.stats = stats
 
-	# Wave 1 of imps scattered across the island.
+	# Grid inventory: the backpack's equipped pistols drive the marine's held guns.
+	var inventory := InventoryScript.build()
+	marine.add_child(inventory)
+	marine.inventory = inventory
+
+	# XP orbs dropped by dead imps, magnetised to the marine.
+	var loot := XpOrbFieldScript.new()
+	loot.player = marine
+	add_child(loot)
+
+	# Gameplay HUD: animated portrait + HP, full-width XP strip, level medallion.
+	# Built before the spawner so its wave-started handler is connected in time.
+	var hud := HudScript.new()
+	hud.stats = stats
+	add_child(hud)
+
+	# Level-up menu — pauses on level-up; lets the player manage the inventory.
+	var levelup := LevelUpMenuScript.new()
+	levelup.inventory = inventory
+	levelup.hud = hud
+	add_child(levelup)
+	stats.leveled_up.connect(levelup.open)
+
+	# Wave spawner — announces imp spawns + wave boundaries; we wire them to loot + HUD here.
 	var spawner := WaveSpawnerScript.new()
 	spawner.player = marine
+	spawner.imp_spawned.connect(loot.on_imp_spawned)
+	spawner.wave_cleared.connect(loot.vacuum_all)
+	spawner.wave_started.connect(hud.on_wave_started)
 	add_child(spawner)
 
 	# Guns floating around the marine, auto-aiming at the closest imps.
@@ -57,19 +85,13 @@ func _ready() -> void:
 	# Battle music — random track, quiet, fades out when no imps are alive.
 	add_child(BattleMusicScript.new())
 
-	# Screen-space "video filter" grade (sharpen + clarity + saturation), on layer 0
-	# so it grades the 3D scene only — the UI below draws on top, ungraded.
+	# Screen-space "video filter" grade, on layer 0 so it grades the 3D scene only.
 	add_child(ScreenGradeScript.new())
 
 	# Screen-border markers for off-screen imps.
 	var ui := CanvasLayer.new()
 	ui.add_child(IndicatorsScript.new())
 	add_child(ui)
-
-	# Gameplay HUD: animated portrait + HP, full-width XP strip, level.
-	var hud := HudScript.new()
-	hud.stats = stats
-	add_child(hud)
 
 	# ESC pause menu (Resume / Exit).
 	add_child(PauseMenuScript.new())
@@ -95,7 +117,7 @@ func _build_environment() -> void:
 	env.background_color = Color(0.03, 0.01, 0.015)        # near-black void, faint red
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
 	env.ambient_light_color = Color(0.50, 0.27, 0.20)      # ember fill — less pure-red so it doesn't wash everything red
-	env.ambient_light_energy = 0.85                        # was 1.15; lowered so the key light still cuts shadow contrast into the ground, but not so low it goes too dark
+	env.ambient_light_energy = 0.85                        # was 0.85; cut so the key light's cast shadows actually read (was washing the marine's shadow out flat)
 
 	# Tone mapping + exposure — the biggest "feel" lever.
 	env.tonemap_mode = Environment.TONE_MAPPER_ACES
@@ -131,8 +153,8 @@ func _build_key_light() -> void:
 	# Low, warm key raking across the island like firelight out of the void.
 	var key := DirectionalLight3D.new()
 	key.light_color = Color(1.0, 0.5, 0.25)
-	key.light_energy = 2.2   # raking warm key; strong enough to carve the stone grain's micro-shadows
-	key.rotation = Vector3(deg_to_rad(-22.0), deg_to_rad(35.0), 0.0)
+	key.light_energy = 2.8   # was 2.2; bumped to keep lit ground bright after the ambient cut
+	key.rotation = Vector3(deg_to_rad(-42.0), deg_to_rad(35.0), 0.0)   # steeper than -22 so the marine's shadow sits under/behind it (grounds it) instead of raking far off-frame
 	key.shadow_enabled = true
 	add_child(key)
 
