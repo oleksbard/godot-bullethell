@@ -13,9 +13,10 @@ var max_health := 60.0
 var health := 60.0
 var level := 1
 var xp := 0.0
-var xp_to_next := 10.0
+var xp_to_next := 16.0                     # = xp_for(1); first level-up cost (Brotato curve)
 var total_xp := 0.0                       # never decreases; lets the HUD animate across level boundaries
-var souls := 0                            # currency banked from collected soul-motes; spent on upgrades later
+var souls := 0                            # currency banked from collected soul-motes; spent in the level-up shop
+var rarity_bonus := 0.0                   # "Increased Rarity" / Luck: flattens the shop's level-roll curve upward (0 for now; future upgrade)
 
 
 # Called by the marine when an imp lands a melee hit.
@@ -38,12 +39,24 @@ func add_xp(amount: float) -> void:
 	xp_changed.emit(total_xp)
 
 
-## Bank souls from collected soul-motes (one per mote). Spent on upgrades later.
+## Bank souls from collected soul-motes (one per mote). Spent in the level-up shop.
 func add_souls(amount: int = 1) -> void:
 	souls += amount
 	souls_changed.emit(souls)
 
 
-## XP needed to clear `lvl` -> lvl+1. Simple linear ramp; tune later.
+## Spend `amount` souls if affordable; returns whether the purchase went through.
+func spend_souls(amount: int) -> bool:
+	if amount > souls:
+		return false
+	souls -= amount
+	souls_changed.emit(souls)
+	return true
+
+
+## XP needed to clear `lvl` -> lvl+1. Brotato's quadratic curve: (level + 3)^2
+## (16, 25, 36, 49, ...), so each level costs progressively more. Brotato counts
+## its first level-up from level 0; we start the marine at level 1, so xp_for(1)=16
+## is the first level-up — the same 16/25/36 ramp, just offset by one in numbering.
 func xp_for(lvl: int) -> float:
-	return 10.0 + float(lvl - 1) * 5.0
+	return float((lvl + 3) * (lvl + 3))

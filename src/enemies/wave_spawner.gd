@@ -29,7 +29,20 @@ const SPAWN_INTERVAL_1 := 0.6    # seconds between spawns in wave 1
 const SPAWN_SPEEDUP := 0.8       # interval ×= this each wave -> later waves spawn faster
 const SPAWN_INTERVAL_MIN := 0.1  # floor so high waves don't all pop at once
 
+# Power scaling: the player's equipped loadout power makes the next wave bigger and
+# its imps tougher (absolute factor — see Inventory.loadout_power). Read once per
+# wave so mid-wave equip changes don't retroactively spike the live wave.
+const POWER_BASELINE := 20.0     # two starting level-1 pistols -> factor 1.0 (no change)
+const POWER_FACTOR_CAP := 6.0    # clamp so a runaway loadout can't make waves explode
+const COUNT_POWER_WEIGHT := 0.6  # how much power inflates the imp count (0 = none, 1 = full factor)
+const STAT_POWER_WEIGHT := 0.5   # how much power inflates per-imp HP + damage
+# Types (hook, not built this PR — only one imp model exists): once variants land,
+# gate them by factor — e.g. factor > 1.4 -> some "brute" imps (×2 HP/size),
+# factor > 2.0 -> fast imps. See _variant_for().
+
 var player: Node3D
+var inventory: Node              # Inventory (set by Main); read for loadout power. null -> factor 1.0
+var _power_factor := 1.0         # loadout-power factor for the current wave (read at _start_wave)
 var _rng := RandomNumberGenerator.new()
 var _wave := 0                   # wave number (1,2,3…), drives the spawn interval
 var _wave_count := WAVE_1_COUNT  # doubles each cleared wave: 15 -> 30 -> 60 ...
@@ -70,13 +83,31 @@ func _process(delta: float) -> void:
 
 
 ## Begin spawning a wave of `count` imps; each wave drips faster than the last.
+## `count` is the unscaled baseline (kept for the doubling sequence); the loadout
+## power factor inflates how many actually spawn.
 func _start_wave(count: int) -> void:
 	_wave += 1
-	_wave_count = count
-	_to_spawn = count
+	_wave_count = count          # unscaled baseline -> next wave doubles this
+	_power_factor = _read_power_factor()
+	_to_spawn = roundi(float(count) * lerpf(1.0, _power_factor, COUNT_POWER_WEIGHT))
 	_spawn_interval = maxf(SPAWN_INTERVAL_MIN, SPAWN_INTERVAL_1 * pow(SPAWN_SPEEDUP, _wave - 1))
 	_spawn_timer = 0.0           # first imp portals in right away
 	wave_started.emit(_wave)
+
+
+## The current loadout's power factor (1.0 at the starting loadout, capped). Stronger
+## loadout -> bigger, tougher waves. No inventory (e.g. tests) -> 1.0.
+func _read_power_factor() -> float:
+	if inventory == null or not inventory.has_method("loadout_power"):
+		return 1.0
+	return clampf(float(inventory.loadout_power()) / POWER_BASELINE, 1.0, POWER_FACTOR_CAP)
+
+
+## Forward hook for enemy variants (only one imp type exists today, so this is a no-op).
+## Once variants land, pick a type from `pf`: e.g. pf > 1.4 -> chance of a brute,
+## pf > 2.0 -> chance of a fast imp.
+func _variant_for(_pf: float) -> void:
+	pass
 
 
 ## Count of live imps still in the wave.
@@ -93,10 +124,11 @@ func _spawn_one() -> void:
 	var pt := _scatter_point()
 	var imp := ImpScript.new()
 	imp.player = player
-	imp.max_hp = ImpScript.BASE_HP + float(_wave - 1) * HP_PER_WAVE
+	var stat_mult := lerpf(1.0, _power_factor, STAT_POWER_WEIGHT)   # power makes imps tougher
+	imp.max_hp = (ImpScript.BASE_HP + float(_wave - 1) * HP_PER_WAVE) * stat_mult
 	imp.hp = imp.max_hp
-	imp.attack_damage = ImpScript.BASE_ATTACK_DAMAGE + float(_wave - 1) * ATTACK_DMG_PER_WAVE
-	imp.xp_value = ImpScript.BASE_XP + float(_wave - 1) * XP_PER_WAVE
+	imp.attack_damage = (ImpScript.BASE_ATTACK_DAMAGE + float(_wave - 1) * ATTACK_DMG_PER_WAVE) * stat_mult
+	imp.xp_value = ImpScript.BASE_XP + float(_wave - 1) * XP_PER_WAVE   # reward tracks wave, not loadout
 	imp.position = pt
 	add_child(imp)
 	imp.emerge(EMERGE_TIME)      # frozen + scaling up while the portal is open

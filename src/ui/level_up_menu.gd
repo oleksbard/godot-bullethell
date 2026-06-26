@@ -16,6 +16,7 @@ const ItemTooltipScript := preload("res://src/ui/item_tooltip.gd")
 const DragGhostScript := preload("res://src/ui/drag_ghost.gd")
 const UiFxScript := preload("res://src/ui/ui_fx.gd")
 const InventorySfxScript := preload("res://src/audio/inventory_sfx.gd")
+const InventoryItemScript := preload("res://src/inventory/inventory_item.gd")
 
 const DIM := Color(0.02, 0.0, 0.0, 1.0)   # solid near-black: a clean modal backdrop (also hides the frozen HUD banner behind it)
 const EMBER := Color(1.0, 0.45, 0.2)
@@ -24,7 +25,11 @@ const EMBER_DIM := Color(0.62, 0.22, 0.1)
 const PANEL_BG := Color(0.06, 0.02, 0.02, 0.92)
 const BTN_BG := Color(0.06, 0.02, 0.02, 0.92)
 const DROP_FLASH := Color(1.0, 0.85, 0.55, 0.5)   # warm flash over a freshly-dropped item
-const UPGRADE_SLOTS := 4
+const SHOP_SLOTS := 4                              # 4 rolled offers per level-up
+const BASE_PRICE := 10.0                           # souls; an offer's price = round(BASE_PRICE * level^PRICE_EXP)
+const PRICE_EXP := 1.5
+const UNAFFORDABLE := Color(0.7, 0.35, 0.3)        # price colour when you can't afford it
+const SOLD_DIM := Color(0.5, 0.5, 0.5, 0.8)        # icon tint for an unaffordable offer
 
 # Scaling: the centred content is sized to cover this fraction of the viewport's
 # limiting dimension (so it fills the screen but keeps its aspect), centred.
@@ -35,6 +40,8 @@ const MIN_SCALE := 0.4
 const BASE_CELL := 44
 const BASE_TITLE_FONT := 52
 const BASE_SOULS_FONT := 30
+const BASE_POWER_FONT := 28
+const BASE_PRICE_FONT := 22
 const BASE_LABEL_FONT := 26
 const BASE_BTN_FONT := 30
 const BASE_STUB := 64
@@ -56,11 +63,16 @@ var _content: VBoxContainer         # the centred panel block, scaled to TARGET_
 var _columns: HBoxContainer
 var _left: VBoxContainer
 var _right: VBoxContainer
-var _upgrade_row: HBoxContainer
+var _shop_row: HBoxContainer
 var _title: Label
 var _souls_label: Label             # "N SOULS" banked-currency readout under the title
+var _power_label: Label             # "LOADOUT POWER N" — sum of equipped pistols' power
 var _section_labels: Array[Label] = []
-var _stubs: Array[Panel] = []
+var _offer_buttons: Array[Button] = []   # the 4 shop offer slots
+var _offer_icons: Array[TextureRect] = []
+var _offer_prices: Array[Label] = []
+var _offers: Array = []             # per-slot {item, price, sold}
+var _rng := RandomNumberGenerator.new()  # rolls offers (tests can seed it)
 var _continue: Button
 var _base_natural := Vector2.ZERO   # content's natural size at k = 1, measured once
 var _cell_size := BASE_CELL         # current scaled cell size (drives the ghost too)
@@ -79,6 +91,7 @@ func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	layer = 11                       # above the pause menu's 10
 	visible = false
+	_rng.randomize()
 	_build()
 
 
@@ -89,8 +102,9 @@ func open(_level: int = 0) -> void:
 		return
 	_open = true
 	_souls_label.text = "%d SOULS" % (stats.souls if stats != null else 0)
+	_roll_offers()                   # 4 fresh shop offers, rolled off the player's level + luck
 	_apply_layout_scale()
-	_refresh_views()
+	_refresh_views()                 # also refreshes the loadout-power readout
 	visible = true
 	get_tree().paused = true
 
@@ -145,21 +159,26 @@ func _build() -> void:
 	_souls_label.add_theme_color_override("font_color", SOUL)
 	_content.add_child(_souls_label)
 
+	_power_label = Label.new()
+	_power_label.text = "LOADOUT POWER 0"
+	_power_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_power_label.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	_power_label.add_theme_color_override("font_color", EMBER)
+	_content.add_child(_power_label)
+
 	_columns = HBoxContainer.new()
 	_columns.alignment = BoxContainer.ALIGNMENT_CENTER
 	_columns.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	_content.add_child(_columns)
 
-	# Left column: UPGRADES (stub) on top, STASH below.
+	# Left column: SHOP (4 rolled offers) on top, STASH below.
 	_left = VBoxContainer.new()
 	_columns.add_child(_left)
-	_left.add_child(_section_label("UPGRADES"))
-	_upgrade_row = HBoxContainer.new()
-	for _i in UPGRADE_SLOTS:
-		var s := _stub_slot()
-		_stubs.append(s)
-		_upgrade_row.add_child(s)
-	_left.add_child(_upgrade_row)
+	_left.add_child(_section_label("SHOP"))
+	_shop_row = HBoxContainer.new()
+	for i in SHOP_SLOTS:
+		_shop_row.add_child(_offer_slot(i))
+	_left.add_child(_shop_row)
 	_left.add_child(_section_label("STASH"))
 	_stash_view = GridViewScript.new()
 	_stash_view.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
@@ -210,17 +229,20 @@ func _set_sizes(k: float) -> void:
 	_tooltip_font = maxi(13, roundi(BASE_TOOLTIP_FONT * k))   # floor so stats stay readable
 	_title.add_theme_font_size_override("font_size", maxi(8, roundi(BASE_TITLE_FONT * k)))
 	_souls_label.add_theme_font_size_override("font_size", maxi(8, roundi(BASE_SOULS_FONT * k)))
+	_power_label.add_theme_font_size_override("font_size", maxi(8, roundi(BASE_POWER_FONT * k)))
 	for l in _section_labels:
 		l.add_theme_font_size_override("font_size", maxi(6, roundi(BASE_LABEL_FONT * k)))
 	_continue.add_theme_font_size_override("font_size", maxi(6, roundi(BASE_BTN_FONT * k)))
 	_continue.custom_minimum_size = BASE_BTN_SIZE * k
-	for s in _stubs:
-		s.custom_minimum_size = Vector2(BASE_STUB, BASE_STUB) * k
+	for b in _offer_buttons:
+		b.custom_minimum_size = Vector2(BASE_STUB, BASE_STUB) * k
+	for p in _offer_prices:
+		p.add_theme_font_size_override("font_size", maxi(7, roundi(BASE_PRICE_FONT * k)))
 	_content.add_theme_constant_override("separation", roundi(BASE_CONTENT_SEP * k))
 	_columns.add_theme_constant_override("separation", roundi(BASE_COL_SEP * k))
 	_left.add_theme_constant_override("separation", roundi(BASE_INCOL_SEP * k))
 	_right.add_theme_constant_override("separation", roundi(BASE_INCOL_SEP * k))
-	_upgrade_row.add_theme_constant_override("separation", roundi(BASE_STUB_SEP * k))
+	_shop_row.add_theme_constant_override("separation", roundi(BASE_STUB_SEP * k))
 	_backpack_view.cell_size = _cell_size
 	_backpack_view.refresh()
 	_stash_view.cell_size = _cell_size
@@ -235,16 +257,53 @@ func _section_label(text: String) -> Label:
 	return l
 
 
-func _stub_slot() -> Panel:
-	var p := Panel.new()
-	p.custom_minimum_size = Vector2(BASE_STUB, BASE_STUB)
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = PANEL_BG
-	sb.border_color = EMBER_DIM
-	sb.set_border_width_all(2)
-	sb.set_corner_radius_all(4)
-	p.add_theme_stylebox_override("panel", sb)
-	return p
+## A shop offer slot: a clickable icon button bordered in its rarity colour, with the
+## soul price on its own line beneath (legible at any scale). Buying is wired through
+## the button's `pressed` -> _buy(index).
+func _offer_slot(index: int) -> Control:
+	var col := VBoxContainer.new()
+	col.alignment = BoxContainer.ALIGNMENT_CENTER
+
+	var b := Button.new()
+	b.custom_minimum_size = Vector2(BASE_STUB, BASE_STUB)
+	b.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	b.clip_contents = true
+	b.pressed.connect(_buy.bind(index))
+	var icon := TextureRect.new()
+	icon.set_anchors_preset(Control.PRESET_FULL_RECT)
+	icon.offset_left = 3
+	icon.offset_top = 3
+	icon.offset_right = -3
+	icon.offset_bottom = -3
+	icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	b.add_child(icon)
+	col.add_child(b)
+
+	var price := Label.new()
+	price.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	price.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	price.add_theme_color_override("font_color", SOUL)
+	price.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	col.add_child(price)
+
+	_offer_buttons.append(b)
+	_offer_icons.append(icon)
+	_offer_prices.append(price)
+	_style_offer(b, EMBER_DIM)
+	return col
+
+
+## Border an offer button in `border` across all its visual states.
+func _style_offer(b: Button, border: Color) -> void:
+	for state in ["normal", "hover", "pressed", "disabled"]:
+		var sb := StyleBoxFlat.new()
+		sb.bg_color = PANEL_BG
+		sb.border_color = border
+		sb.set_border_width_all(3 if state == "hover" else 2)
+		sb.set_corner_radius_all(4)
+		b.add_theme_stylebox_override(state, sb)
 
 
 func _make_button(text: String, handler: Callable) -> Button:
@@ -334,6 +393,8 @@ func _update_tooltip(screen_pos: Vector2) -> void:
 	var hit := _view_and_cell(screen_pos)
 	if not hit.is_empty():
 		it = hit[1].item_at(hit[2])
+	else:
+		it = _offer_at(screen_pos)               # hovering a shop offer shows its stats too
 	if it == null:
 		_tooltip.hide_tip()
 	else:
@@ -361,6 +422,89 @@ func _view_and_cell(screen_pos: Vector2) -> Array:
 func _refresh_views() -> void:
 	_backpack_view.refresh()
 	_stash_view.refresh()
+	_update_loadout_power()
+
+
+## Refresh the LOADOUT POWER readout from the currently-equipped pistols.
+func _update_loadout_power() -> void:
+	if _power_label == null:
+		return
+	var p: int = inventory.loadout_power() if inventory != null else 0
+	_power_label.text = "LOADOUT POWER %d" % p
+
+
+# --- shop -------------------------------------------------------------------
+
+## Roll 4 fresh offers off the player's level + rarity_bonus, and paint the slots.
+func _roll_offers() -> void:
+	_offers.clear()
+	var player_level: int = stats.level if stats != null else 1
+	var rb: float = stats.rarity_bonus if stats != null else 0.0
+	for i in SHOP_SLOTS:
+		var item := InventoryItemScript.rolled_pistol(player_level, rb, _rng)
+		_offers.append({"item": item, "price": _price_for(item), "sold": false})
+		_refresh_offer(i)
+
+
+## Souls price for an item: round(BASE_PRICE * level^PRICE_EXP).
+func _price_for(item: Object) -> int:
+	return roundi(BASE_PRICE * pow(float(item.level()), PRICE_EXP))
+
+
+## Paint offer slot `index`: icon, price, rarity border, and affordable/sold state.
+func _refresh_offer(index: int) -> void:
+	var offer: Dictionary = _offers[index]
+	var icon := _offer_icons[index]
+	var price := _offer_prices[index]
+	var btn := _offer_buttons[index]
+	if offer["sold"]:
+		icon.texture = null
+		price.text = "SOLD"
+		price.add_theme_color_override("font_color", EMBER_DIM)
+		btn.disabled = true
+		_style_offer(btn, EMBER_DIM)
+		return
+	var item: Object = offer["item"]
+	var affordable: bool = stats != null and stats.souls >= int(offer["price"])
+	icon.texture = GridViewScript.icon_for(item)
+	icon.modulate = Color.WHITE if affordable else SOLD_DIM
+	price.text = "%d" % int(offer["price"])
+	price.add_theme_color_override("font_color", SOUL if affordable else UNAFFORDABLE)
+	btn.disabled = false
+	_style_offer(btn, ItemTooltipScript.RARITY_COLORS.get(item.rarity(), EMBER))
+
+
+## Try to buy offer `index`: needs souls + stash room. Spends souls, drops the item
+## into the stash (drag it to the backpack to equip), and marks the slot sold.
+func _buy(index: int) -> void:
+	if not _open or index >= _offers.size():
+		return
+	var offer: Dictionary = _offers[index]
+	if offer["sold"] or offer["item"] == null:
+		return
+	var price: int = int(offer["price"])
+	if stats == null or stats.souls < price:
+		return                                   # can't afford (price already shows red)
+	if not inventory.add_to_stash(offer["item"]):
+		return                                   # stash full -> no-op
+	stats.spend_souls(price)
+	offer["sold"] = true
+	_souls_label.text = "%d SOULS" % stats.souls
+	for i in _offers.size():
+		_refresh_offer(i)                        # fewer souls -> other offers may now be unaffordable
+	_refresh_views()
+	_sfx.play_drop()
+	var center := _offer_buttons[index].get_global_rect().get_center()
+	UiFxScript.ring(_root, center, SOUL, _cell_size * 1.5, maxf(3.0, _cell_size * 0.12))
+
+
+## The item under `screen_pos` if it's an unsold shop offer, else null (for the tooltip).
+func _offer_at(screen_pos: Vector2) -> Object:
+	for i in _offer_buttons.size():
+		if i < _offers.size() and not _offers[i]["sold"]:
+			if _offer_buttons[i].get_global_rect().has_point(screen_pos):
+				return _offers[i]["item"]
+	return null
 
 
 func _make_ghost() -> void:

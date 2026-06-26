@@ -73,6 +73,7 @@ func _ready() -> void:
 	# Wave spawner — announces imp spawns + wave boundaries; we wire them to loot + HUD here.
 	var spawner := WaveSpawnerScript.new()
 	spawner.player = marine
+	spawner.inventory = inventory   # read equipped loadout power to scale each wave
 	spawner.imp_spawned.connect(loot.on_imp_spawned)
 	spawner.wave_cleared.connect(loot.vacuum_all)
 	spawner.wave_started.connect(hud.on_wave_started)

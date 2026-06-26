@@ -70,7 +70,7 @@ var _xp_target := 0.0       # authoritative lifetime XP (from PlayerStats.total_
 var _xp_disp := 0.0         # lifetime XP the bar currently represents (animated)
 var _xp_level := 1          # level the animated bar is currently filling
 var _xp_level_start := 0.0  # lifetime XP at the start of _xp_level
-var _xp_to_next := 10.0     # XP span of _xp_level (stats.xp_for(_xp_level))
+var _xp_to_next := 16.0     # XP span of _xp_level (stats.xp_for(_xp_level)); seeded in _init_xp_display
 
 
 func _ready() -> void:

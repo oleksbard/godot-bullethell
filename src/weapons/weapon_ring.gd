@@ -64,13 +64,19 @@ func _rebuild() -> void:
 	if player != null and player.has_method("get_hand_mounts"):
 		hands = player.get_hand_mounts()
 
+	var pistols: Array = []
 	var n := clampi(gun_count, 0, 12)
 	if _inventory != null:
-		n = clampi(_inventory.equipped_pistols().size(), 0, 12)
+		pistols = _inventory.equipped_pistols()
+		n = clampi(pistols.size(), 0, 12)
 
 	for i in n:
 		var g: Node3D = GunScript.new()
 		g.fired.connect(_on_gun_fired)
+		# Each gun fires with its equipped pistol's level-scaled stats (defaults to base otherwise).
+		if i < pistols.size():
+			g.damage = pistols[i].damage_value()
+			g.fire_interval = pistols[i].fire_interval_value()
 		# Stagger first shots so the guns fire individually, not in lockstep.
 		g.stagger(GunScript.FIRE_INTERVAL * float(i) / float(maxi(n, 1)))
 		add_child(g)

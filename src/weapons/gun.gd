@@ -22,6 +22,11 @@ const BARREL_TIP := Vector3(0.0, 0.02, -0.34)   # muzzle of the pistol barrel
 # orientation to the body's forward), so the gun skips its own yaw.
 var held := false
 
+# Per-instance combat stats, defaulting to the base pistol. The WeaponRing sets
+# these from the equipped item, so a higher-level pistol really shoots harder/faster.
+var damage := DAMAGE
+var fire_interval := FIRE_INTERVAL
+
 static var _shared_flash_tex: Texture2D   # soft round flash sprite, shared by all guns
 
 var _target: Node3D
@@ -80,11 +85,11 @@ func _process(delta: float) -> void:
 
 
 func _fire() -> void:
-	_cooldown = FIRE_INTERVAL
+	_cooldown = fire_interval
 	_flash.light_energy = FLASH_ENERGY
 	_flash_quad.scale = Vector3.ONE * randf_range(0.85, 1.3)   # vary so shots don't look identical
 	_flash_quad.visible = true
-	fired.emit(to_global(BARREL_TIP), _target, DAMAGE)
+	fired.emit(to_global(BARREL_TIP), _target, damage)
 
 
 func _build_body() -> void:

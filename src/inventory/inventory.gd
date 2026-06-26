@@ -48,6 +48,27 @@ func equipped_pistols() -> Array:
 	return out
 
 
+## Total combat power of the equipped (backpack) pistols — drives the next wave.
+func loadout_power() -> int:
+	var p := 0
+	for it in equipped_pistols():
+		p += it.power()
+	return p
+
+
+## Place `item` in the stash at the first cell (reading order) where it fits; returns
+## whether it was placed (false = stash full). Used by the shop on a purchase.
+func add_to_stash(item: InventoryItemScript) -> bool:
+	var cells: Array = stash.valid.keys()
+	cells.sort_custom(func(a, b): return (a.y < b.y) or (a.y == b.y and a.x < b.x))
+	for origin in cells:
+		if stash.fits(item, origin):
+			stash.place(item, origin)
+			changed.emit()
+			return true
+	return false
+
+
 ## Remove `item` from `grid` (e.g. when the player picks it up) and notify listeners.
 func pick_up(grid: InventoryGridScript, item: InventoryItemScript) -> void:
 	grid.remove(item)

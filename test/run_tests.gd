@@ -74,7 +74,16 @@ func _initialize() -> void:
 	await _test_level_up_menu()
 	await _test_hud_clear_medals()
 	await _test_hud_xp_animation()
+	_test_xp_curve()
 	await _test_souls()
+	_test_hand_target_freed()
+	_test_item_level_and_power()
+	_test_rarity_roll()
+	_test_spend_souls()
+	await _test_gun_stats_from_item()
+	await _test_shop_offers()
+	_test_loadout_power()
+	await _test_wave_power_scaling()
 	print("──")
 	print("%d passed, %d failed" % [_passed, _failed])
 	quit(1 if _failed > 0 else 0)
@@ -909,6 +918,7 @@ func _test_item_tooltip() -> void:
 	for r in rows:
 		shown[r[0]] = r[1]
 	_ok(shown.has("Damage") and shown["Damage"] == "5", "Damage shows as 5")
+	_ok(shown.has("Power") and shown["Power"] == "10", "Power shows as 10 (base pistol)")
 	_ok(not shown.has("Projectile"), "Projectile is no longer a stat row (it's a header tag)")
 	_ok(not shown.has("Piercing") and not shown.has("Ricochet"),
 		"zero-valued stats (Piercing/Ricochet) are hidden")
@@ -988,6 +998,23 @@ func _test_hud_clear_medals() -> void:
 	stats.free()
 
 
+## Brotato-style quadratic XP curve: xp_for(lvl) == (lvl+3)^2, and add_xp wraps
+## levels by that curve (not a flat 10).
+func _test_xp_curve() -> void:
+	_suite = "PlayerStats.curve"
+	var st: Node = PlayerStatsScript.new()
+	_ok(st.xp_for(1) == 16.0 and st.xp_for(2) == 25.0 and st.xp_for(3) == 36.0,
+		"xp_for is (lvl+3)^2: 16 / 25 / 36 (got %.0f / %.0f / %.0f)"
+			% [st.xp_for(1), st.xp_for(2), st.xp_for(3)])
+	_ok(st.xp_to_next == st.xp_for(1), "initial xp_to_next == xp_for(1)")
+	st.add_xp(15.0)
+	_ok(st.level == 1, "15 XP < 16 -> still level 1")
+	st.add_xp(2.0)                                # total 17: clears 16, 1 carried into level 2
+	_ok(st.level == 2 and absf(st.xp - 1.0) < 0.001, "17 XP -> level 2, 1 XP into the next")
+	_ok(st.xp_to_next == 25.0, "level 2 now needs 25 XP")
+	st.free()
+
+
 func _test_hud_xp_animation() -> void:
 	_suite = "Hud.xp"
 	var stats: Node = PlayerStatsScript.new()
@@ -1008,7 +1035,7 @@ func _test_hud_xp_animation() -> void:
 		"bar animates to the gained XP, still level 1 (value %.1f)" % hud._xp.value)
 
 	# Cross the threshold: stats level up at once, but the flourish waits for the bar.
-	stats.add_xp(8.0)                         # total 12 > 10 -> stats.level becomes 2 now
+	stats.add_xp(13.0)                        # total 17 > 16 (xp_for(1)) -> stats.level becomes 2 now
 	_ok(stats.level == 2, "stats level up immediately (authoritative)")
 	_ok(reached[0] == 0, "the bar hasn't filled yet -> level_reached still not fired")
 
@@ -1044,6 +1071,205 @@ func _test_souls() -> void:
 	_ok(hud._souls_count.text == "6", "HUD counter updates on souls_changed (%s)" % hud._souls_count.text)
 	hud.free()
 	stats.free()
+
+
+func _test_hand_target_freed() -> void:
+	_suite = "Marine.hand"
+	var m: Node3D = MarineScript.new()            # not added; _hand_targets starts [null, null]
+	var dummy := Node3D.new()
+	m._hand_targets[0] = dummy
+	dummy.free()                                  # simulate the imp dying after it was cached
+	_ok(m.get_hand_target(0) == null, "get_hand_target returns null for a freed imp (no crash)")
+	_ok(m.get_hand_target(1) == null, "get_hand_target returns null when the hand rests (no target)")
+	m.free()
+
+
+func _test_item_level_and_power() -> void:
+	_suite = "Item.level"
+	var p1 := InventoryItemScript.pistol()
+	_ok(p1.level() == 1 and p1.rarity() == "Normal" and p1.power() == 10,
+		"level-1 pistol: Normal, power 10 (got L%d %s pow %d)" % [p1.level(), p1.rarity(), p1.power()])
+	var p5 := InventoryItemScript.pistol()
+	p5.item_level = 5
+	_ok(p5.rarity() == "Unique", "level-5 pistol is Unique (got %s)" % p5.rarity())
+	_ok(roundi(p5.damage_value()) == 13, "level-5 damage is 13 (got %d)" % roundi(p5.damage_value()))
+	_ok(p5.power() > p1.power(), "higher level -> more power (%d > %d)" % [p5.power(), p1.power()])
+
+	# Power is strictly monotonic in level, and rarity bands map as designed.
+	var mono := true
+	var prev := 0
+	var bands := {1: "Normal", 2: "Rare", 3: "Rare", 4: "Unique", 5: "Unique", 6: "Legendary", 8: "Legendary"}
+	var bands_ok := true
+	for lvl in range(1, 9):
+		var pi := InventoryItemScript.pistol()
+		pi.item_level = lvl
+		if pi.power() <= prev:
+			mono = false
+		prev = pi.power()
+		if bands.has(lvl) and pi.rarity() != bands[lvl]:
+			bands_ok = false
+	_ok(mono, "power strictly increases with level 1..8")
+	_ok(bands_ok, "rarity bands map Normal/Rare/Unique/Legendary correctly")
+
+
+func _test_rarity_roll() -> void:
+	_suite = "Item.roll"
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 12345
+	# A level-1 player can only ever roll item level 1 (max_level clamps to 1).
+	var only_one := true
+	for i in 50:
+		if InventoryItemScript.roll_level(1, 0.0, rng) != 1:
+			only_one = false
+	_ok(only_one, "a level-1 player only ever rolls item level 1")
+
+	# Same seed, higher rarity_bonus -> higher mean rolled level (the curve flattens up).
+	rng.seed = 999
+	var sum_lo := 0.0
+	for i in 400:
+		sum_lo += InventoryItemScript.roll_level(11, 0.0, rng)
+	rng.seed = 999
+	var sum_hi := 0.0
+	for i in 400:
+		sum_hi += InventoryItemScript.roll_level(11, 0.5, rng)
+	_ok(sum_hi > sum_lo, "rarity_bonus raises the mean rolled level (%.2f > %.2f)" % [sum_hi / 400.0, sum_lo / 400.0])
+
+	# Rolls never exceed max_level for the player level (player 5 -> max 3).
+	rng.seed = 7
+	var within := true
+	for i in 200:
+		var l := InventoryItemScript.roll_level(5, 0.9, rng)
+		if l < 1 or l > 3:
+			within = false
+	_ok(within, "rolls stay within 1..max_level for the player level")
+
+
+func _test_spend_souls() -> void:
+	_suite = "PlayerStats.spend"
+	var st: Node = PlayerStatsScript.new()
+	st.add_souls(30)
+	var emitted := [-1]
+	st.souls_changed.connect(func(s: int) -> void: emitted[0] = s)
+	_ok(st.spend_souls(10) and st.souls == 20, "spend deducts when affordable (souls %d)" % st.souls)
+	_ok(emitted[0] == 20, "spend emits souls_changed")
+	_ok(not st.spend_souls(999) and st.souls == 20, "spend refuses when unaffordable (no change)")
+	st.free()
+
+
+func _test_gun_stats_from_item() -> void:
+	_suite = "WeaponRing.stats"
+	var holder := Node3D.new()
+	get_root().add_child(holder)
+	var m: Node3D = MarineScript.new()
+	holder.add_child(m)
+	var inv: Node = InventoryScript.build()
+	m.add_child(inv)
+	m.inventory = inv
+	var wr: Node3D = WeaponRingScript.new()
+	wr.player = m
+	holder.add_child(wr)
+	await process_frame
+	# Level up an equipped pistol and force the ring to rebuild from the inventory.
+	inv.equipped_pistols()[0].item_level = 5
+	inv.changed.emit()
+	var equipped: Array = inv.equipped_pistols()
+	var dmg_ok := true
+	for i in wr._guns.size():
+		if not is_equal_approx(wr._guns[i].damage, equipped[i].damage_value()):
+			dmg_ok = false
+	_ok(dmg_ok, "each gun fires with its equipped pistol's level-scaled damage")
+	_ok(wr._guns[0].damage > GunScript.DAMAGE, "the leveled pistol's gun deals more than base damage (%.0f > %.0f)"
+		% [wr._guns[0].damage, GunScript.DAMAGE])
+	holder.free()
+
+
+func _test_shop_offers() -> void:
+	_suite = "LevelUpMenu.shop"
+	var inv: Node = InventoryScript.build()
+	var st: Node = PlayerStatsScript.new()
+	st.souls = 1000                               # plenty to buy
+	st.level = 10                                 # allow higher-level rolls
+	var menu: CanvasLayer = LevelUpMenuScript.new()
+	menu.inventory = inv
+	menu.stats = st
+	menu._rng.seed = 42                           # deterministic offers
+	get_root().add_child(menu)
+	await process_frame
+	menu.open(2)
+	_ok(menu._offers.size() == 4, "open() rolls 4 shop offers (got %d)" % menu._offers.size())
+
+	var before_souls: int = st.souls
+	var price: int = int(menu._offers[0]["price"])
+	var stash_before: int = inv.stash.items_in_reading_order().size()
+	menu._buy(0)
+	_ok(st.souls == before_souls - price, "buying spends the offer's soul price (%d -> %d, price %d)"
+		% [before_souls, st.souls, price])
+	_ok(inv.stash.items_in_reading_order().size() == stash_before + 1, "bought item lands in the stash")
+	_ok(menu._offers[0]["sold"], "the bought slot is marked sold")
+	menu._buy(0)
+	_ok(inv.stash.items_in_reading_order().size() == stash_before + 1, "a sold slot can't be bought again")
+
+	st.souls = 0                                  # drain -> next buy is a no-op
+	var stash_now: int = inv.stash.items_in_reading_order().size()
+	menu._buy(1)
+	_ok(inv.stash.items_in_reading_order().size() == stash_now, "an unaffordable offer can't be bought")
+
+	paused = false
+	menu.free()
+	inv.free()
+	st.free()
+
+
+func _test_loadout_power() -> void:
+	_suite = "Inventory.power"
+	var inv: Node = InventoryScript.build()
+	_ok(inv.loadout_power() == 20, "two level-1 pistols -> loadout power 20 (got %d)" % inv.loadout_power())
+	inv.equipped_pistols()[0].item_level = 5      # level up an equipped pistol in place
+	_ok(inv.loadout_power() > 20, "a higher-level equipped pistol raises loadout power (%d)" % inv.loadout_power())
+	var p_before: int = inv.loadout_power()
+	var hi := InventoryItemScript.pistol()
+	hi.item_level = 6
+	inv.add_to_stash(hi)
+	_ok(inv.loadout_power() == p_before, "a stashed pistol doesn't count toward loadout power")
+	inv.free()
+
+
+func _test_wave_power_scaling() -> void:
+	_suite = "WaveSpawner.power"
+	# Baseline spawner (no inventory -> power factor 1.0).
+	var h1 := Node3D.new()
+	get_root().add_child(h1)
+	var base_sp: Node3D = WaveSpawnerScript.new()
+	base_sp.player = Node3D.new()
+	h1.add_child(base_sp.player)
+	h1.add_child(base_sp)                         # _ready -> _start_wave computes _to_spawn
+	var base_to_spawn: int = base_sp._to_spawn
+
+	# Powerful loadout -> bigger wave + tougher imps.
+	var h2 := Node3D.new()
+	get_root().add_child(h2)
+	var inv: Node = InventoryScript.build()
+	for it in inv.equipped_pistols():
+		it.item_level = 8                         # crank loadout power up
+	var sp: Node3D = WaveSpawnerScript.new()
+	sp.player = Node3D.new()
+	h2.add_child(sp.player)
+	sp.inventory = inv
+	h2.add_child(sp)                              # _ready -> _start_wave reads the power factor
+	_ok(sp._power_factor > 1.0, "loadout power raises the wave's power factor (%.1f)" % sp._power_factor)
+	_ok(sp._to_spawn > base_to_spawn, "a stronger loadout spawns more imps (%d > %d)" % [sp._to_spawn, base_to_spawn])
+
+	# A single imp from the powered spawner is tougher than a base wave-1 imp.
+	_pump_spawn(sp, 1)
+	var imps := get_nodes_in_group("imps")
+	var hp: float = imps[0].max_hp if imps.size() > 0 else 0.0
+	_ok(imps.size() > 0 and hp > ImpScript.BASE_HP,
+		"a stronger loadout makes imps tougher (max_hp %.1f > base %.1f)" % [hp, ImpScript.BASE_HP])
+
+	await process_frame
+	h1.free()
+	h2.free()
+	inv.free()
 
 
 ## Sort a cell array by (row, col) so set-equality can use ==.

@@ -293,7 +293,10 @@ func _nearest_on_side(body_yaw: float, want_sign: float) -> Node3D:
 func get_hand_target(index: int) -> Node3D:
 	if index < 0 or index >= _hand_targets.size():
 		return null
-	return _hand_targets[index]
+	var t: Variant = _hand_targets[index]
+	# Guard: while the marine is dead _pick_hand_targets stops refreshing, so a cached
+	# imp may have been freed since. Never hand back a freed instance.
+	return t if is_instance_valid(t) else null
 
 
 ## Sort the live imps nearest-first once per frame; facing + per-arm aim read it.
