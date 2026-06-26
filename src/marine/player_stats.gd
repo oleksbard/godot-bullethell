@@ -8,8 +8,8 @@ signal health_changed(health: float, max_health: float)
 signal xp_changed(xp: float, xp_to_next: float)
 signal leveled_up(level: int)
 
-var max_health := 100.0
-var health := 100.0
+var max_health := 60.0
+var health := 60.0
 var level := 1
 var xp := 0.0
 var xp_to_next := 10.0

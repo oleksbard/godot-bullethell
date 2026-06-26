@@ -6,6 +6,7 @@ extends Node3D
 ## in the "imps" group so weapons can target it and the off-screen indicator finds it.
 
 const Gore := preload("res://src/fx/gore.gd")
+const DamageNumberScript := preload("res://src/fx/damage_number.gd")
 const MODEL: PackedScene = preload("res://models/imp_opt.glb")
 const ANIM_SHADER: Shader = preload("res://src/enemies/imp_anim.gdshader")
 
@@ -23,7 +24,19 @@ const IMP_HEIGHT := 1.3      # model auto-scaled so its height = this (world uni
 const MODEL_YAW := PI        # imp.glb faces +Z; PI turns it to face the player (-Z). jab dir follows.
 const ATTACK_RANGE := 1.4    # within this distance it plays the attack jab
 const ATTACK_SMOOTH := 6.0   # how fast it blends into / out of the attack pose
+const ATTACK_COOLDOWN := 0.8 # seconds between melee hits on the player
+const BASE_ATTACK_DAMAGE := 1.0  # wave-1 hit damage; the spawner scales it up per wave
 const DEATH_TIME := 0.4      # how long the detached corpse takes to crumple + sink
+const DMG_NUMBER_COLOR := Color(1.0, 0.95, 0.7)  # warm flying number for damage dealt to this imp
+
+# Glowing eyes — socket location as fractions of the model's mesh AABB (so it tracks any
+# model), turned into a mesh-local point in _build_model and painted by imp_anim.gdshader.
+const EYE_X_FRAC := 0.20     # offset from the centreline, as a fraction of half-width
+const EYE_Y_FRAC := 0.82     # height up the model (0 feet .. 1 crown)
+const EYE_Z_FRAC := 0.82     # depth front..back (1 = front face, +Z)
+const EYE_RADIUS := 0.10     # glow patch radius (mesh-local units)
+const EYE_COLOR := Color(1.0, 0.6, 0.15)   # searing amber demon eyes
+const EYE_ENERGY := 3.0      # emission energy; must clear the env glow_hdr_threshold to bloom
 
 # Reaction to a hit that doesn't kill: a white flash, a shove back along the bolt,
 # and a brief slow.
@@ -37,6 +50,8 @@ const HIT_SLOW_FACTOR := 0.45  # speed multiplier while slowed
 var player: Node3D
 var max_hp := BASE_HP
 var hp := BASE_HP                # set by the spawner per wave; depleted by take_damage()
+var attack_damage := BASE_ATTACK_DAMAGE   # damage per melee hit; spawner scales per wave
+var _attack_cd := 0.0            # cooldown until this imp can hit the player again
 var _dead := false
 var _emerge := 0.0               # seconds left frozen in the spawn portal
 var _emerge_total := 0.0
@@ -95,6 +110,7 @@ func _spawn_corpse() -> void:
 func take_damage(amount: float, blood_spatters: int = 3, hit_dir: Vector3 = Vector3.ZERO) -> void:
 	if _dead:
 		return
+	DamageNumberScript.spawn(get_parent(), global_position + Vector3(0.0, IMP_HEIGHT * 0.9, 0.0), amount, DMG_NUMBER_COLOR)
 	hp -= amount
 	if hp <= 0.0:
 		die(blood_spatters, hit_dir)
@@ -161,11 +177,18 @@ func _process(delta: float) -> void:
 	if to_player.length() > 0.05:
 		rotation.y = atan2(-to_player.x, -to_player.z)   # always face the player (-Z forward)
 
-	# Attack pose in melee range (no damage yet — just the vertex-shader jab).
-	var want_attack := 1.0 if to_player.length() <= ATTACK_RANGE else 0.0
+	# Attack pose + melee hit in range: the vertex-shader jab, and a hit on cooldown.
+	var in_range := to_player.length() <= ATTACK_RANGE
+	var want_attack := 1.0 if in_range else 0.0
 	_attack = move_toward(_attack, want_attack, delta * ATTACK_SMOOTH)
 	for m in _anim_mats:
 		m.set_shader_parameter("attack", _attack)   # ponytail: per-imp uniform; becomes INSTANCE_CUSTOM under MultiMesh
+
+	_attack_cd -= delta
+	if in_range and _attack_cd <= 0.0:
+		_attack_cd = ATTACK_COOLDOWN
+		if player.has_method("take_damage"):
+			player.take_damage(attack_damage)
 
 
 ## Decay the white hurt-flash and push it to the shader (0 when not flashing).
@@ -217,6 +240,14 @@ func _build_model() -> void:
 		var a := mesh_inst.get_aabb()
 		mat.set_shader_parameter("local_min_y", a.position.y)
 		mat.set_shader_parameter("local_height", a.size.y)
+		# Eye socket point (mesh-local); shader mirrors it across x=0 for the second eye.
+		mat.set_shader_parameter("eye_pos", Vector3(
+			EYE_X_FRAC * a.size.x * 0.5,
+			a.position.y + EYE_Y_FRAC * a.size.y,
+			a.position.z + EYE_Z_FRAC * a.size.z))
+		mat.set_shader_parameter("eye_radius", EYE_RADIUS)
+		mat.set_shader_parameter("eye_emission", Vector3(EYE_COLOR.r, EYE_COLOR.g, EYE_COLOR.b))
+		mat.set_shader_parameter("eye_energy", EYE_ENERGY)
 		mesh_inst.material_override = mat
 		_anim_mats.append(mat)
 

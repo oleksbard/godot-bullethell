@@ -18,6 +18,7 @@ const HEIGHT := 1.0          # float height (~hand height)
 const BOB_AMP := 0.08
 const BOB_FREQ := 2.0
 const HELD_SEAT := 0.17      # seat the held gun forward of the wrist, into the palm, along the barrel
+const HELD_LIFT := 0.12      # raise the held gun a touch so it sits up in the hand, not sunk
 
 # Max targeting range in world units. ~12 ≈ 500px ≈ two-thirds of the screen
 # height (ortho size 18 over 720px ≈ 40px/unit). Imps farther than this are
@@ -80,7 +81,7 @@ func _process(delta: float) -> void:
 		if _mounts[i] != null:
 			var grip: Node3D = _mounts[i]
 			var b := grip.global_transform.basis.orthonormalized()
-			_guns[i].global_transform = Transform3D(b, grip.global_position + (-b.z) * HELD_SEAT)
+			_guns[i].global_transform = Transform3D(b, grip.global_position + (-b.z) * HELD_SEAT + Vector3.UP * HELD_LIFT)
 		else:
 			var ang := TAU * float(float_i) / float(maxi(float_total, 1))
 			var y := HEIGHT + sin(_bob + float(i)) * BOB_AMP

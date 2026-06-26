@@ -21,8 +21,11 @@ extends Node3D
 ## Movement/turning happen on this root; the bob moves the *model's* local Y so
 ## the camera-followed root never shakes.
 
+signal died                  # emitted once when health hits 0 (Main shows the game-over menu)
+
 const IslandShape := preload("res://src/lib/island_shape.gd")
 const ImpScript := preload("res://src/enemies/imp.gd")
+const DamageNumberScript := preload("res://src/fx/damage_number.gd")
 const MODEL: PackedScene = preload("res://models/marine_01.glb")
 
 const SPEED := 6.0
@@ -49,6 +52,19 @@ const GRIP_ROLL := deg_to_rad(0.0)   # spare: roll the held pistol about its bar
 const GRIP_YAW := deg_to_rad(0.0)  # flip the held pistol about its vertical axis so the muzzle points at the enemy, not back at the marine
 const BOB_HEIGHT := 0.06
 
+# Taking damage.
+const HIT_FLASH_TIME := 0.12        # white hurt-flash duration (same idea as the imps')
+const FLASH_ENERGY := 2.0           # peak emission energy of the flash
+const DMG_NUMBER_COLOR := Color(1.0, 0.3, 0.2)   # red flying number for damage taken
+const DEATH_FALL_TIME := 0.7        # how long the death topple takes
+
+# Overhead health bar — a flat bar above the head, shown only when hurt (< 100%).
+const OHB_WIDTH := 1.1
+const OHB_HEIGHT := 0.15
+const OHB_Y := 2.45                 # height above the marine's origin
+const OHB_BG := Color(0.06, 0.01, 0.01)
+const OHB_FILL := Color(0.85, 0.12, 0.08)
+
 var current_velocity := Vector3.ZERO
 
 var _model: Node3D
@@ -66,6 +82,13 @@ var _r_dir := Vector3.FORWARD          # smoothed aim direction of the right arm
 var _l_dir := Vector3.FORWARD          # smoothed aim direction of the left arm
 var _walk_phase := 0.0
 var _walk_amt := 0.0
+
+var stats: Node                        # PlayerStats holding health/xp; set by Main
+var _alive := true
+var _flash_mats: Array[StandardMaterial3D] = []   # duplicated model materials we pulse white on hit
+var _flash := 0.0                      # seconds left of the hurt-flash
+var _hp_bar: Node3D                    # overhead health bar (flat, world-aligned, shown when hurt)
+var _hp_fill_pivot: Node3D             # left-anchored fill, scaled by the health ratio
 
 
 func _ready() -> void:
@@ -99,6 +122,25 @@ func _ready() -> void:
 	_make_hand_mount("RightHand", _b_rarm)
 	_make_hand_mount("LeftHand", _b_larm)
 
+	_setup_flash_mats()
+	_build_overhead_bar()
+
+
+## Duplicate each model material with emission enabled (energy 0) so a hit can pulse
+## the whole marine white — the same hurt-flash the imps get.
+func _setup_flash_mats() -> void:
+	if _model == null:
+		return
+	for mi in _model.find_children("*", "MeshInstance3D", true, false):
+		var inst := mi as MeshInstance3D
+		var base := inst.get_active_material(0)
+		var dup: StandardMaterial3D = (base as StandardMaterial3D).duplicate() if base is StandardMaterial3D else StandardMaterial3D.new()
+		dup.emission_enabled = true
+		dup.emission = Color(1.0, 1.0, 1.0)
+		dup.emission_energy_multiplier = 0.0
+		inst.set_surface_override_material(0, dup)
+		_flash_mats.append(dup)
+
 
 ## Grip points at the hands, in [right, left] order. The WeaponRing's first guns
 ## parent here so they sit in the marine's grip. Empty if the rig has no hands
@@ -108,11 +150,103 @@ func get_hand_mounts() -> Array[Node3D]:
 
 
 func _process(delta: float) -> void:
+	_update_flash(delta)         # runs even while dead, so the death flash plays
+	if not _alive:
+		return
 	_refresh_targets()
 	_pick_hand_targets()
 	_handle_movement(delta)
 	_animate_walk(delta)
 	_aim_arms(delta)
+	_update_overhead_bar()
+
+
+## Marine took `amount` damage (from an imp). Flash white, pop a red flying number,
+## drain the shared PlayerStats, and die when it hits 0.
+func take_damage(amount: float) -> void:
+	if not _alive:
+		return
+	_flash = HIT_FLASH_TIME
+	DamageNumberScript.spawn(get_parent(), global_position + Vector3(0.0, 2.0, 0.0), amount, DMG_NUMBER_COLOR)
+	if stats != null:
+		stats.take_damage(amount)
+		if stats.health <= 0.0:
+			_die()
+
+
+## Health hit 0: stop combat, flash, topple over, and tell Main (which raises the
+## game-over menu after the fall plays).
+func _die() -> void:
+	if not _alive:
+		return
+	_alive = false
+	_flash = HIT_FLASH_TIME
+	if _hp_bar != null:
+		_hp_bar.visible = false          # hide the overhead bar once dead
+	died.emit()
+	if _model != null:
+		var tw := _model.create_tween().set_parallel(true)
+		tw.tween_property(_model, "rotation:x", -PI * 0.5, DEATH_FALL_TIME).set_ease(Tween.EASE_IN)
+		tw.tween_property(_model, "position:y", MODEL_Y_OFFSET - 0.2, DEATH_FALL_TIME).set_ease(Tween.EASE_IN)
+
+
+## Decay the white hurt-flash and push its energy onto the duplicated materials.
+func _update_flash(delta: float) -> void:
+	if _flash <= 0.0:
+		return
+	_flash = maxf(_flash - delta, 0.0)
+	var e := (_flash / HIT_FLASH_TIME) * FLASH_ENERGY
+	for m in _flash_mats:
+		m.emission_energy_multiplier = e
+
+
+## A flat health bar above the head: dark backing + a left-anchored crimson fill.
+## Lies in the XY plane (faces +Z); _update_overhead_bar orients it flat + up each
+## frame. Hidden until the marine is hurt.
+func _build_overhead_bar() -> void:
+	_hp_bar = Node3D.new()
+	add_child(_hp_bar)
+	_hp_bar.visible = false
+	_hp_bar.add_child(_bar_quad(OHB_WIDTH, OHB_HEIGHT, OHB_BG))
+
+	_hp_fill_pivot = Node3D.new()
+	_hp_fill_pivot.position.x = -OHB_WIDTH * 0.5         # pivot at the bar's left edge
+	_hp_bar.add_child(_hp_fill_pivot)
+	var fill := _bar_quad(OHB_WIDTH, OHB_HEIGHT * 0.78, OHB_FILL)
+	fill.position = Vector3(OHB_WIDTH * 0.5, 0.0, 0.01)  # span pivot..pivot+W; +Z draws over the backing
+	_hp_fill_pivot.add_child(fill)
+
+
+## A flat unshaded coloured quad (centred), for the overhead bar.
+func _bar_quad(w: float, h: float, col: Color) -> MeshInstance3D:
+	var m := StandardMaterial3D.new()
+	m.albedo_color = col
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var q := QuadMesh.new()
+	q.size = Vector2(w, h)
+	var mi := MeshInstance3D.new()
+	mi.mesh = q
+	mi.material_override = m
+	return mi
+
+
+## Position the overhead bar flat above the head (world-aligned, never spinning with
+## the body) and scale its fill to the current health. Shown only when hurt (< 100%).
+func _update_overhead_bar() -> void:
+	if _hp_bar == null:
+		return
+	if stats == null:
+		_hp_bar.visible = false
+		return
+	var ratio := clampf(stats.health / maxf(stats.max_health, 0.001), 0.0, 1.0)
+	_hp_bar.visible = ratio < 0.999
+	_hp_fill_pivot.scale.x = ratio
+	# Override the global transform so the bar stays flat + screen-aligned regardless
+	# of the marine's facing, hovering above the head.
+	_hp_bar.global_transform = Transform3D(
+		Basis.from_euler(Vector3(-PI * 0.5, 0.0, 0.0)),
+		global_position + Vector3(0.0, OHB_Y, 0.0))
 
 
 ## Pick the imp each hand covers: the nearest one on that hand's half-sphere

@@ -14,6 +14,7 @@ const IslandShape := preload("res://src/lib/island_shape.gd")
 
 const WAVE_1_COUNT := 15
 const HP_PER_WAVE := 3.0         # imp HP added per wave (pistol dmg 5: w1=1 shot, w2-3=2 shots, w4-5=3...)
+const ATTACK_DMG_PER_WAVE := 1.0 # imp melee damage added per wave (wave 1 = 1, wave 2 = 2, ...)
 const WAVE_DELAY := 5.0          # pause after a wave is cleared
 const SPAWN_MARGIN := 2.0        # keep spawns inside the coast
 const MIN_FROM_CENTER := 6.0     # don't spawn on top of the player (spawns at centre)
@@ -87,6 +88,7 @@ func _spawn_one() -> void:
 	imp.player = player
 	imp.max_hp = ImpScript.BASE_HP + float(_wave - 1) * HP_PER_WAVE
 	imp.hp = imp.max_hp
+	imp.attack_damage = ImpScript.BASE_ATTACK_DAMAGE + float(_wave - 1) * ATTACK_DMG_PER_WAVE
 	imp.position = pt
 	add_child(imp)
 	imp.emerge(EMERGE_TIME)      # frozen + scaling up while the portal is open

@@ -16,13 +16,16 @@ const BattleMusicScript := preload("res://src/audio/battle_music.gd")
 const PauseMenuScript := preload("res://src/ui/pause_menu.gd")
 const PlayerStatsScript := preload("res://src/marine/player_stats.gd")
 const HudScript := preload("res://src/ui/hud.gd")
+const GameOverMenuScript := preload("res://src/ui/game_over_menu.gd")
 const ScreenGradeScript := preload("res://src/fx/screen_grade.gd")
 
 const CAM_OFFSET := Vector3(0.0, 13.0, 7.0)
 const CAM_SIZE := 18.0             # orthographic vertical extent (smaller = closer)
+const DEATH_MENU_DELAY := 0.9      # let the death topple play before the menu pops
 
 var marine: Node3D
 var camera: Camera3D
+var game_over: CanvasLayer
 
 
 func _ready() -> void:
@@ -39,6 +42,7 @@ func _ready() -> void:
 	var stats := PlayerStatsScript.new()
 	stats.xp = 4.0           # placeholder partial XP so the bar reads as alive
 	marine.add_child(stats)
+	marine.stats = stats     # the marine drains this on imp hits, dies at 0
 
 	# Wave 1 of imps scattered across the island.
 	var spawner := WaveSpawnerScript.new()
@@ -70,7 +74,19 @@ func _ready() -> void:
 	# ESC pause menu (Resume / Exit).
 	add_child(PauseMenuScript.new())
 
+	# Game-over menu — raised after the marine dies (New Game / Exit).
+	game_over = GameOverMenuScript.new()
+	add_child(game_over)
+	marine.died.connect(_on_player_died)
+
 	_build_camera()
+
+
+## The marine died — let its death topple play, then raise the game-over menu.
+func _on_player_died() -> void:
+	await get_tree().create_timer(DEATH_MENU_DELAY).timeout
+	if is_instance_valid(game_over):
+		game_over.show_menu()
 
 
 func _build_environment() -> void:

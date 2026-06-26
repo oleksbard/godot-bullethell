@@ -23,7 +23,7 @@ const XP_FILL := Color(1.0, 0.62, 0.16)
 const MARGIN := 12
 const XP_HEIGHT := 10
 const PORTRAIT := 116
-const HP_SIZE := Vector2(236, 22)
+const HP_SIZE := Vector2(360, 40)
 
 # Portrait framing — a face/mug shot aimed at the rig's Head bone. Distances are
 # fractions of head height so it stays framed whatever the model's scale.
@@ -166,7 +166,7 @@ func _frame_face(cam: Camera3D) -> void:
 func _build_hp(root: Control) -> void:
 	_hp = ProgressBar.new()
 	_hp.show_percentage = false
-	_hp.position = Vector2(MARGIN + PORTRAIT + MARGIN, XP_HEIGHT + MARGIN + 20)
+	_hp.position = Vector2(MARGIN + PORTRAIT + MARGIN, XP_HEIGHT + MARGIN + 38)
 	_hp.size = HP_SIZE
 	_hp.custom_minimum_size = HP_SIZE
 	_hp.add_theme_stylebox_override("background", _flat(TRACK_BG, EMBER_DIM, 2, 4))
@@ -177,7 +177,7 @@ func _build_hp(root: Control) -> void:
 	_hp_label.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_hp_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_hp_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	_hp_label.add_theme_font_size_override("font_size", 15)
+	_hp_label.add_theme_font_size_override("font_size", 22)
 	_hp_label.add_theme_color_override("font_color", Color.WHITE)
 	_hp_label.add_theme_color_override("font_shadow_color", Color(0.0, 0.0, 0.0, 0.85))
 	_hp_label.add_theme_constant_override("shadow_offset_x", 1)

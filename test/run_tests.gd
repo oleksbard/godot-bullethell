@@ -10,6 +10,7 @@ extends SceneTree
 
 const IslandShape := preload("res://src/lib/island_shape.gd")
 const MarineScript := preload("res://src/marine/marine.gd")
+const PlayerStatsScript := preload("res://src/marine/player_stats.gd")
 const WaveSpawnerScript := preload("res://src/enemies/wave_spawner.gd")
 const WeaponRingScript := preload("res://src/weapons/weapon_ring.gd")
 const ImpScript := preload("res://src/enemies/imp.gd")
@@ -38,6 +39,8 @@ func _initialize() -> void:
 	await _test_imp_take_damage()
 	await _test_imp_hit_react()
 	await _test_imp_emerge()
+	await _test_player_damage()
+	await _test_imp_attack()
 	await _test_portal_fail()
 	await _test_projectile_kills()
 	await _test_wave_progression()
@@ -392,6 +395,54 @@ func _test_portal_fail() -> void:
 	imp.free()                                # imp killed before it finished emerging
 	portal._process(0.05)
 	_ok(portal._failed, "portal fails when its imp dies while the portal is active")
+	holder.free()
+
+
+func _test_player_damage() -> void:
+	_suite = "Marine.damage"
+	var holder := Node3D.new()
+	get_root().add_child(holder)
+	var m: Node3D = MarineScript.new()
+	holder.add_child(m)
+	var stats: Node = PlayerStatsScript.new()
+	stats.max_health = 10.0
+	stats.health = 10.0
+	m.add_child(stats)
+	m.stats = stats
+	var died := [false]
+	m.died.connect(func(): died[0] = true)
+	await process_frame                       # _ready builds the model + flash mats
+
+	m.take_damage(4.0)
+	_ok(is_equal_approx(stats.health, 6.0), "a hit drains player health (%.0f)" % stats.health)
+	_ok(not died[0], "player survives a non-lethal hit")
+	m.take_damage(20.0)                       # overkill
+	_ok(stats.health <= 0.0 and died[0], "player dies at 0 HP and emits `died`")
+	holder.free()
+
+
+func _test_imp_attack() -> void:
+	_suite = "Imp.attack"
+	var holder := Node3D.new()
+	get_root().add_child(holder)
+	var m: Node3D = MarineScript.new()
+	holder.add_child(m)
+	var stats: Node = PlayerStatsScript.new()
+	stats.max_health = 50.0
+	stats.health = 50.0
+	m.add_child(stats)
+	m.stats = stats
+	var imp: Node3D = ImpScript.new()
+	imp.player = m
+	imp.attack_damage = 3.0
+	holder.add_child(imp)
+	await process_frame
+	imp.global_position = m.global_position + Vector3(0.5, 0.0, 0.0)   # inside ATTACK_RANGE
+
+	var before: float = stats.health
+	for i in 12:
+		imp._process(0.1)                     # > ATTACK_COOLDOWN -> lands at least one hit
+	_ok(stats.health < before, "an imp in melee range damages the player (%.0f -> %.0f)" % [before, stats.health])
 	holder.free()
 
 
