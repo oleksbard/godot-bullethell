@@ -11,6 +11,7 @@ const ObstacleFieldScript := preload("res://src/world/obstacle_field.gd")
 const COLUMN_SHADER := preload("res://src/world/column_xray.gdshader")
 
 const OUTER_LAVA_Y := -1.2   # the lava sea sits this far below the island top
+const LAVA_COLOR := Color(1.05, 0.5, 0.13)   # plain bright lava — shared by the rivers and the sea
 
 
 static func build() -> Node3D:
@@ -257,7 +258,7 @@ static func _add_fissures(root: Node3D, rng: RandomNumberGenerator, field: Obsta
 
 ## A flat, tapering ribbon mesh through `pts` (XZ), width peaking in the middle and
 ## pinching to a point at both ends — reads as a molten stream, not stacked boxes.
-static func _build_lava_ribbon(root: Node3D, pts: Array, max_hw: float, mat: StandardMaterial3D) -> void:
+static func _build_lava_ribbon(root: Node3D, pts: Array, max_hw: float, mat: Material) -> void:
 	var n := pts.size()
 	var lefts: Array[Vector2] = []
 	var rights: Array[Vector2] = []
@@ -355,20 +356,18 @@ static func _ember_mat(rng: RandomNumberGenerator) -> StandardMaterial3D:
 	m.albedo_color = ColorUtil.vary(Color(0.50, 0.10, 0.04), rng)
 	m.emission_enabled = true
 	m.emission = Color(1.0, 0.30, 0.06)
-	m.emission_energy_multiplier = 2.2
+	m.emission_energy_multiplier = 1.5   # glows hot (the impassable cue) without blooming into a bright blob
 	m.roughness = 0.7
 	return m
 
 
-## Molten stream — brighter, hotter orange so the ribbon reads as flowing lava.
+## Molten stream — a plain bright lava colour. Unshaded + static (no texture, no
+## flow), so it reads as a clean glowing crack and never shimmers as the camera moves.
 static func _lava_mat(rng: RandomNumberGenerator) -> StandardMaterial3D:
 	var m := StandardMaterial3D.new()
 	m.cull_mode = BaseMaterial3D.CULL_DISABLED
-	m.albedo_color = ColorUtil.vary(Color(0.55, 0.14, 0.03), rng)
-	m.emission_enabled = true
-	m.emission = Color(1.0, 0.42, 0.10)
-	m.emission_energy_multiplier = 1.4
-	m.roughness = 0.6
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.albedo_color = ColorUtil.vary(LAVA_COLOR, rng)
 	return m
 
 
@@ -384,25 +383,10 @@ static func _column_mat(rng: RandomNumberGenerator) -> ShaderMaterial:
 	return m
 
 
-## The outer molten sea: warm molten mottling over dark cooled crust, from a tiled
-## noise baked into the albedo. Unshaded, so a huge flat plane can't catch the key
-## light's specular and bloom into a white lightbox; warm but always under the glow
-## threshold, so the bright pops stay with the inner ribbons, embers, and columns.
+## The outer molten sea: the same plain bright lava as the rivers — unshaded, no
+## texture or flow, so there's nothing for the screen-space grade to crawl on.
 static func _lava_sea_mat() -> StandardMaterial3D:
-	var noise := FastNoiseLite.new()
-	noise.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
-	noise.frequency = 0.03
-	noise.fractal_type = FastNoiseLite.FRACTAL_FBM
-	noise.fractal_octaves = 4
-	var ntex := NoiseTexture2D.new()
-	ntex.width = 512
-	ntex.height = 512
-	ntex.seamless = true
-	ntex.noise = noise
-
 	var m := StandardMaterial3D.new()
 	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	m.albedo_color = Color(0.78, 0.22, 0.06)   # peak molten; noise multiplies it down to dark crust
-	m.albedo_texture = ntex
-	m.uv1_scale = Vector3(26.0, 26.0, 26.0)    # fine molten cells near the coast
+	m.albedo_color = LAVA_COLOR
 	return m

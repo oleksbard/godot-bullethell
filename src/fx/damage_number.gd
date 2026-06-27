@@ -11,20 +11,23 @@ const LIFETIME := 0.7
 var _amount := 0.0
 var _color := Color.WHITE
 var _pos := Vector3.ZERO
+var _prefix := ""            # e.g. "+" for a heal (+20); "" for plain damage
 
 
 ## Pop a number at `world_pos` under `parent` (parent must be unrotated/unscaled —
-## the composition root or a spawner, both at origin here).
-static func spawn(parent: Node, world_pos: Vector3, amount: float, color: Color) -> void:
+## the composition root or a spawner, both at origin here). `prefix` is prepended to
+## the number (use "+" for a heal pickup).
+static func spawn(parent: Node, world_pos: Vector3, amount: float, color: Color, prefix: String = "") -> void:
 	var n := Self.new()
 	n._amount = amount
 	n._color = color
 	n._pos = world_pos
+	n._prefix = prefix
 	parent.add_child(n)
 
 
 func _ready() -> void:
-	text = str(roundi(_amount))
+	text = _prefix + str(roundi(_amount))
 	modulate = _color
 	billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	no_depth_test = true                 # always drawn over the world

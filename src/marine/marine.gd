@@ -194,6 +194,15 @@ func gain_souls(amount: int) -> void:
 	stats.add_souls(amount)
 
 
+## Restore health from a picked-up health vial — forwards to PlayerStats. Returns the HP
+## actually restored (0 when full or dead), so the vial only consumes itself on a real heal
+## and can pop a "+X" number for the amount. Mirrors gain_xp/gain_souls.
+func gain_health(amount: float) -> float:
+	if not _alive or stats == null:
+		return 0.0
+	return stats.heal(amount)
+
+
 ## Health hit 0: stop combat, flash, topple over, and tell Main (which raises the
 ## game-over menu after the fall plays).
 func _die() -> void:

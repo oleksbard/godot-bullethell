@@ -25,6 +25,17 @@ func take_damage(amount: float) -> void:
 	health_changed.emit(health, max_health)
 
 
+# Called (via marine.gain_health) when a health vial is picked up. Restores up to `amount`
+# HP (clamped to max) and returns the HP actually restored — 0 when already full, which lets
+# the vial know to stay on the map instead of being wasted.
+func heal(amount: float) -> float:
+	var before := health
+	health = clampf(health + amount, 0.0, max_health)
+	if health != before:
+		health_changed.emit(health, max_health)
+	return health - before
+
+
 # Called (via marine.gain_xp) when a dropped XP orb is collected. Updates the
 # authoritative level/xp at once; the HUD lags the bar behind via animation and
 # only shows the level-up flourish/modal when the bar reaches 100% (see hud.gd).

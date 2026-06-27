@@ -18,6 +18,7 @@ const PlayerStatsScript := preload("res://src/marine/player_stats.gd")
 const HudScript := preload("res://src/ui/hud.gd")
 const GameOverMenuScript := preload("res://src/ui/game_over_menu.gd")
 const XpOrbFieldScript := preload("res://src/loot/xp_orb_field.gd")
+const HealthVialFieldScript := preload("res://src/loot/health_vial_field.gd")
 const ScreenGradeScript := preload("res://src/fx/screen_grade.gd")
 const InventoryScript := preload("res://src/inventory/inventory.gd")
 const LevelUpMenuScript := preload("res://src/ui/level_up_menu.gd")
@@ -64,6 +65,13 @@ func _ready() -> void:
 	var loot := XpOrbFieldScript.new()
 	loot.player = marine
 	add_child(loot)
+
+	# Health vials dropped onto the island over time — capped, hurt-only; off-screen ones
+	# are flagged by a "+" token on the screen border (see offscreen_indicators.gd).
+	var vials := HealthVialFieldScript.new()
+	vials.player = marine
+	vials.stats = stats
+	add_child(vials)
 
 	# Gameplay HUD: animated portrait + HP, full-width XP strip, level medallion.
 	# Built before the spawner so its wave-started handler is connected in time.
