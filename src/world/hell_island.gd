@@ -22,7 +22,6 @@ static func build() -> Node3D:
 	rng.seed = 666
 	var seg := 60
 
-	var crust := Color(0.27, 0.22, 0.20)   # charred top crust — bright enough to read after the ambient cut, so the rock grain shows
 	var rock_a := Color(0.20, 0.12, 0.11)  # warm dark basalt
 	var rock_b := Color(0.12, 0.08, 0.09)  # near-black rock
 
@@ -39,12 +38,27 @@ static func build() -> Node3D:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 
-	# Flat charred top: fan from centre to the coast ring, one uniform colour (a
-	# centre-fan with per-tri colour variance shows radial wedge seams).
+	# Charred top, displaced into rolling hills: a centre cap plus concentric rings,
+	# each vertex lifted by IslandShape.surface_height, tinted by elevation (_crust_at)
+	# so the relief reads as albedo VALUE — gentle-slope lighting alone gets crushed by
+	# the screen-grade posterize. Per-tri face normals from _add_tri still shade the
+	# slopes; the outer ring sits at ~0 (taper) so it meets the cliff sides at rings[0].y = 0.
+	var centre := Vector3(0.0, IslandShape.surface_height(0.0, 0.0), 0.0)
+	var rs0 := 1.0 / float(TOP_RINGS)
 	for i in seg:
-		var v0 := IslandShape.ring_vertex(rings[0]["rs"], rings[0]["y"], i, seg)
-		var v1 := IslandShape.ring_vertex(rings[0]["rs"], rings[0]["y"], (i + 1) % seg, seg)
-		_add_tri(st, Vector3.ZERO, v1, v0, crust, Vector3.UP)
+		var a := _top_vertex(rs0, i, seg)
+		var b := _top_vertex(rs0, (i + 1) % seg, seg)
+		_add_top_tri(st, centre, b, a)
+	for k in range(1, TOP_RINGS):
+		var rsa := float(k) / float(TOP_RINGS)
+		var rsb := float(k + 1) / float(TOP_RINGS)
+		for i in seg:
+			var a := _top_vertex(rsa, i, seg)
+			var b := _top_vertex(rsa, (i + 1) % seg, seg)
+			var c := _top_vertex(rsb, i, seg)
+			var d := _top_vertex(rsb, (i + 1) % seg, seg)
+			_add_top_tri(st, a, b, c)
+			_add_top_tri(st, b, d, c)
 
 	# Sides: stitch each ring to the next.
 	for k in range(rings.size() - 1):
@@ -140,6 +154,51 @@ static func _outward(a: Vector3, b: Vector3, c: Vector3) -> Vector3:
 	return ctr.normalized()
 
 
+const TOP_RINGS := 14   ## concentric rings tessellating the displaced top (more = smoother hills)
+
+# The top is tinted by ELEVATION (dark valleys -> ashy peaks) so the rolling hills
+# read as albedo VALUE, not just lighting. Lighting gradients on gentle slopes get
+# crushed by the screen-grade's 16-band posterize; baking the height into colour spans
+# several bands, so the grade terraces + ink-outlines the hills instead of flattening
+# them. CRUST_LOW/HIGH are far enough apart in luma to cross multiple posterize bands.
+const CRUST_LOW := Color(0.09, 0.05, 0.05)    ## valley char (deep maroon)
+const CRUST_HIGH := Color(0.62, 0.50, 0.40)   ## peak ash (bright) — wide luma range so the grade's posterize terraces the hills
+
+
+## A displaced vertex on the top surface at radial fraction `rs` (0 centre .. 1 coast),
+## segment `i` of `seg` around the circle: XZ on the coastline ring, Y from surface_height.
+static func _top_vertex(rs: float, i: int, seg: int) -> Vector3:
+	var ang := TAU * float(i) / float(seg)
+	var r := IslandShape.radius(ang) * rs
+	var x := r * cos(ang)
+	var z := r * sin(ang)
+	return Vector3(x, IslandShape.surface_height(x, z), z)
+
+
+## Crust colour at height `y`: dark in the valleys, ashy on the peaks. Maps the
+## surface_height range [-HILL_AMP, HILL_AMP] onto LOW..HIGH.
+static func _crust_at(y: float) -> Color:
+	var t := clampf((y / IslandShape.HILL_AMP + 1.0) * 0.5, 0.0, 1.0)
+	return CRUST_LOW.lerp(CRUST_HIGH, t)
+
+
+## A top triangle with PER-VERTEX height colour (smooth/Gouraud) and a flat face
+## normal. Per-vertex colour (vs. a per-tri average) avoids the radial wedge starburst
+## the polar tessellation would otherwise show at the centre, and lets the screen-grade
+## posterize slice clean height contours across the slopes.
+static func _add_top_tri(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3) -> void:
+	var n := (b - a).cross(c - a)
+	if n.length() < 0.000001:
+		return
+	n = n.normalized()
+	if n.dot(Vector3.UP) < 0.0:
+		n = -n
+	for v in [a, b, c]:
+		st.set_color(_crust_at(v.y))
+		st.set_normal(n)
+		st.add_vertex(v)
+
+
 ## Scatter small rubble across the surface. The glowing (lava-stone) ones are
 ## impassable blockers; the dark ones are steps the marine + imps climb on top of.
 static func _scatter_rocks(root: Node3D, rng: RandomNumberGenerator, field: ObstacleFieldScript) -> void:
@@ -159,13 +218,14 @@ static func _scatter_rocks(root: Node3D, rng: RandomNumberGenerator, field: Obst
 		var mb := MeshInstance3D.new()
 		mb.mesh = MeshFactory.beveled_box(Vector3(rs, rs * 0.7, rs), 0.08)
 		mb.material_override = _ember_mat(rng) if glow else _dark_rock_mat(rng)
-		mb.position = Vector3(c.x, 0.04, c.y)
+		var gy := IslandShape.surface_height(c.x, c.y)
+		mb.position = Vector3(c.x, gy + 0.04, c.y)
 		mb.rotation.y = rng.randf_range(0.0, TAU)
 		root.add_child(mb)
 		if glow:
 			field.add_block(c, fr)                # lava-stone: impassable
 		else:
-			field.add_step(c, fr, 0.04 + rs * 0.7 * 0.5)   # dark rock: top = centre + half-height
+			field.add_step(c, fr, gy + 0.04 + rs * 0.7 * 0.5)   # dark rock: top = ground + half-height
 
 
 ## A few larger boulder formations — 2-4 chunks near each other, so the field has
@@ -191,13 +251,14 @@ static func _add_boulder_clusters(root: Node3D, rng: RandomNumberGenerator, fiel
 			var mb := MeshInstance3D.new()
 			mb.mesh = MeshFactory.beveled_box(Vector3(sz, hgt, sz), 0.12)
 			mb.material_override = _ember_mat(rng) if glow else _dark_rock_mat(rng)
-			mb.position = Vector3(c.x, 0.04, c.y)
+			var gy := IslandShape.surface_height(c.x, c.y)
+			mb.position = Vector3(c.x, gy + 0.04, c.y)
 			mb.rotation.y = rng.randf_range(0.0, TAU)
 			root.add_child(mb)
 			if glow:
 				field.add_block(c, fr)            # lava-stone: impassable
 			else:
-				field.add_step(c, fr, 0.04 + hgt * 0.5)
+				field.add_step(c, fr, gy + 0.04 + hgt * 0.5)
 
 
 ## Jagged rock spires clustered around the coast — tall, tilted columns that break
@@ -224,7 +285,7 @@ static func _add_spires(root: Node3D, rng: RandomNumberGenerator, field: Obstacl
 			var mb := MeshInstance3D.new()
 			mb.mesh = MeshFactory.beveled_box(Vector3(w, h, w * 0.8), 0.12)
 			mb.material_override = mat
-			mb.position = base + off + Vector3(0.0, h * 0.5 - 0.3, 0.0)
+			mb.position = Vector3(c.x, IslandShape.surface_height(c.x, c.y) + h * 0.5 - 0.3, c.y)
 			mb.rotation = Vector3(rng.randf_range(-0.16, 0.16), rng.randf_range(0.0, TAU), rng.randf_range(-0.16, 0.16))
 			root.add_child(mb)
 			field.add_block(c, fr)
@@ -280,10 +341,9 @@ static func _build_lava_ribbon(root: Node3D, pts: Array, max_hw: float, mat: Mat
 
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	var y := 0.06
 	for i in n - 1:
-		_ribbon_tri(st, lefts[i], rights[i], rights[i + 1], y)
-		_ribbon_tri(st, lefts[i], rights[i + 1], lefts[i + 1], y)
+		_ribbon_tri(st, lefts[i], rights[i], rights[i + 1])
+		_ribbon_tri(st, lefts[i], rights[i + 1], lefts[i + 1])
 
 	var mb := MeshInstance3D.new()
 	mb.mesh = st.commit()
@@ -291,11 +351,12 @@ static func _build_lava_ribbon(root: Node3D, pts: Array, max_hw: float, mat: Mat
 	root.add_child(mb)
 
 
-## One upward-facing ribbon triangle (CULL_DISABLED material, so winding is moot).
-static func _ribbon_tri(st: SurfaceTool, a: Vector2, b: Vector2, c: Vector2, y: float) -> void:
+## One upward-facing ribbon triangle (CULL_DISABLED material, so winding is moot),
+## each vertex riding 0.06 above the terrain so the stream hugs the hills.
+static func _ribbon_tri(st: SurfaceTool, a: Vector2, b: Vector2, c: Vector2) -> void:
 	for v in [a, b, c]:
 		st.set_normal(Vector3.UP)
-		st.add_vertex(Vector3(v.x, y, v.y))
+		st.add_vertex(Vector3(v.x, IslandShape.surface_height(v.x, v.y) + 0.06, v.y))
 
 
 ## The molten sea around the island: a big mottled emissive plane below the rim.

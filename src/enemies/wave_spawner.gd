@@ -151,5 +151,7 @@ func _scatter_point() -> Vector3:
 		if max_r <= MIN_FROM_CENTER:
 			continue
 		var r := _rng.randf_range(MIN_FROM_CENTER, max_r)
-		return Vector3(cos(ang) * r, 0.0, sin(ang) * r)
-	return Vector3(MIN_FROM_CENTER, 0.0, 0.0)
+		var x := cos(ang) * r
+		var z := sin(ang) * r
+		return Vector3(x, IslandShape.surface_height(x, z), z)
+	return Vector3(MIN_FROM_CENTER, IslandShape.surface_height(MIN_FROM_CENTER, 0.0), 0.0)

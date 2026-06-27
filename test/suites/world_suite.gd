@@ -11,6 +11,7 @@ const MarineScript := preload("res://src/marine/marine.gd")
 
 func run(t: TestContext) -> void:
 	_test_island_shape(t)
+	_test_surface_height(t)
 	_test_marine_clamp(t)
 	_test_obstacle_field(t)
 	_test_island_no_overlap(t)
@@ -27,6 +28,38 @@ func _test_island_shape(t: TestContext) -> void:
 	t.ok(in_bounds, "radius() stays within [0.6, 1.4] * BASE for all angles")
 	t.ok(is_equal_approx(IslandShape.radius(0.5), IslandShape.radius(0.5 + TAU)),
 		"radius() is periodic over TAU")
+
+
+## surface_height: deterministic, flat at/beyond the coast, bounded by HILL_AMP,
+## and with real relief in the interior.
+func _test_surface_height(t: TestContext) -> void:
+	t.suite = "IslandShape.surface_height"
+	t.ok(is_equal_approx(IslandShape.surface_height(3.0, -4.0), IslandShape.surface_height(3.0, -4.0)),
+		"surface_height is deterministic")
+
+	var ang := 0.7
+	var coast := IslandShape.radius(ang)
+	var beyond := Vector2(cos(ang), sin(ang)) * coast * 1.5
+	t.ok(is_equal_approx(IslandShape.surface_height(beyond.x, beyond.y), 0.0),
+		"surface_height is 0 beyond the coast")
+
+	var at := Vector2(cos(ang), sin(ang)) * coast
+	t.ok(absf(IslandShape.surface_height(at.x, at.y)) < 0.05,
+		"surface_height tapers to ~0 at the coast")
+
+	var bounded := true
+	var any_relief := false
+	for i in 40:
+		for j in 40:
+			var x := lerpf(-20.0, 20.0, float(i) / 39.0)
+			var z := lerpf(-20.0, 20.0, float(j) / 39.0)
+			var h := IslandShape.surface_height(x, z)
+			if absf(h) > IslandShape.HILL_AMP + 0.001:
+				bounded = false
+			if absf(h) > 0.1:
+				any_relief = true
+	t.ok(bounded, "surface_height stays within +/- HILL_AMP")
+	t.ok(any_relief, "surface_height has real relief in the interior")
 
 
 func _test_marine_clamp(t: TestContext) -> void:
@@ -92,6 +125,20 @@ func _test_obstacle_field(t: TestContext) -> void:
 	o.add_block(Vector2(2.0, 0.0), 1.0)
 	t.ok(not o.overlaps(Vector2(2.0, 0.0), 0.5, 1), "overlaps(limit) ignores footprints past the cutoff")
 
+	# Ground baseline: with no step under the body, resolve returns the ground height.
+	var gnd: ObstacleFieldScript = ObstacleFieldScript.new()
+	var lifted: Vector3 = gnd.resolve(Vector3(5.0, 0.0, 0.0), 0.5, 1.2)
+	t.ok(is_equal_approx(lifted.y, 1.2), "resolve returns the ground baseline when on no step")
+
+	# A step lower than the ground loses to the ground; a higher step wins.
+	gnd.add_step(Vector2.ZERO, 1.0, 0.4)
+	var low: Vector3 = gnd.resolve(Vector3(0.1, 0.0, 0.0), 0.4, 1.2)
+	t.ok(is_equal_approx(low.y, 1.2), "ground wins over a lower step")
+	var g2: ObstacleFieldScript = ObstacleFieldScript.new()
+	g2.add_step(Vector2.ZERO, 1.0, 2.0)
+	var hi: Vector3 = g2.resolve(Vector3(0.1, 0.0, 0.0), 0.4, 1.2)
+	t.ok(is_equal_approx(hi.y, 2.0), "a higher step wins over the ground")
+
 
 ## Generation guarantee: no two solid footprints (columns + rocks) are stacked.
 func _test_island_no_overlap(t: TestContext) -> void:
@@ -130,10 +177,23 @@ func _test_marine_obstacle_push(t: TestContext) -> void:
 	var d := Vector2(m.position.x, m.position.z).length()
 	t.ok(d >= 1.0 + MarineScript.BODY_RADIUS - 0.01, "a column shoves the marine clear (%.2f)" % d)
 
+	# A rock taller than the local ground lifts the marine onto it. The rock top is set
+	# above the terrain swell at the origin so this tests the climb, not the ground
+	# (robust to surface_height amplitude/frequency tuning).
 	var stepped: ObstacleFieldScript = ObstacleFieldScript.new()
-	stepped.add_step(Vector2.ZERO, 2.0, 0.5)
+	var rock_top := IslandShape.surface_height(0.0, 0.0) + 1.0
+	stepped.add_step(Vector2.ZERO, 2.0, rock_top)
 	m.obstacles = stepped
 	m.position = Vector3(0.0, 0.0, 0.0)
 	m._handle_movement(0.016)
-	t.ok(is_equal_approx(m.position.y, 0.5), "the marine climbs onto a rock (y=%.2f)" % m.position.y)
+	t.ok(is_equal_approx(m.position.y, rock_top), "the marine climbs onto a rock above the terrain (y=%.2f)" % m.position.y)
+
+	# With no obstacles, the marine's movement step drops it onto the terrain height.
+	var empty: ObstacleFieldScript = ObstacleFieldScript.new()
+	m.obstacles = empty
+	var spot := Vector2(4.0, -3.0)                 # an interior point with real relief (worldX, worldZ)
+	m.position = Vector3(spot.x, 0.0, spot.y)
+	m._handle_movement(0.016)                       # no keys -> resolve lifts to surface_height
+	t.ok(is_equal_approx(m.position.y, IslandShape.surface_height(spot.x, spot.y)),
+		"the marine stands on the terrain height (y=%.3f)" % m.position.y)
 	m.free()

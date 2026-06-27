@@ -17,7 +17,9 @@ const DURATION := 1.0          # total life — matches the imp's emerge time
 const OPEN_TIME := 0.18        # flare open
 const CLOSE_TIME := 0.22       # collapse shut
 const RADIUS := 0.95
-const FLAME := Color(0.6, 0.04, 0.02)   # dark ember-red
+const FLAME := Color(0.6, 0.04, 0.02)   # dark ember-red (light + fallback ring)
+const DECAL_FLAME := Color(1.4, 0.22, 0.07)   # flame-red the projected runes are painted with (mobile tints decal ALBEDO, not emission)
+const DECAL_EMISSION := 0.45   # fraction of GLOW used for the rune decal's (untinted/white) emissive core — kept low so it reads hot-red, not white
 const GLOW := 1.3              # base brightness; flickers around this like fire
 const RING_TUBE := 0.02        # super-thin outline torus framing the rune circle
 const RUNE_SPIN := 0.5         # rad/sec the circle slowly turns
@@ -30,9 +32,9 @@ const FAIL_STROBE := 55.0      # rad/sec harsh strobe while the summon collapses
 # and it dies before emerging, the portal "fails": strobes and collapses early.
 var imp: Node3D
 
-var _rune_mat: StandardMaterial3D
-var _rune_additive := false    # decal art glows additively (tint via albedo); marks are emissive
-var _ring_mat: StandardMaterial3D
+var _rune_mat: StandardMaterial3D       # marks-fallback material (emissive); null on the decal path
+var _rune_decal_node: Decal             # the projected rune circle (texture path); null on the marks fallback
+var _ring_mat: StandardMaterial3D       # outline torus material (marks fallback only)
 var _light: OmniLight3D
 var _runes: Node3D
 var _tw: Tween
@@ -47,7 +49,6 @@ func _ready() -> void:
 	_watching = is_instance_valid(imp)   # imp is freshly assigned here, still valid
 	_flicker_seed = randf() * TAU
 	_build_runes()
-	_build_ring()
 
 	# A dim flame-red light so the ground inside/around the circle lifts a touch.
 	_light = OmniLight3D.new()
@@ -64,9 +65,10 @@ func _build_runes() -> void:
 	_runes = Node3D.new()
 	add_child(_runes)
 	if ResourceLoader.exists(RUNE_TEXTURE):
-		_rune_decal()
+		_rune_decal()            # projected art supplies its own circle — no torus ring
 	else:
 		_rune_marks()
+		_build_ring()            # fallback marks get the engine-drawn outline ring
 
 
 ## A super-thin flame-red outline torus framing the rune circle. Same colour as
@@ -89,27 +91,23 @@ func _build_ring() -> void:
 	add_child(ring)
 
 
-## The art: a flat quad of the rune texture, glowing the flame red. Additive blend
-## means a plain BLACK background adds nothing (so the art needs no transparency),
-## while a transparent PNG is honoured too. Generate runes light/white on black.
+## The art, PROJECTED onto the ground with a Decal so it follows the terrain instead of
+## clipping through the hills as a flat quad did. Emission-only (albedo_mix 0): it glows
+## the flame-red runes onto the rock without painting over it, and the texture's alpha
+## masks the projection to just the rune marks. modulate tints to flame; emission_energy
+## (driven by _set_glow) does the fire flicker. The art supplies its own circle, so no
+## separate outline ring is needed. Tall box (size.y) spans the hill under the footprint.
 func _rune_decal() -> void:
 	var tex: Texture2D = load(RUNE_TEXTURE)
-	_rune_mat = StandardMaterial3D.new()
-	_rune_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	_rune_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
-	_rune_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA   # honour alpha if present
-	_rune_mat.albedo_color = FLAME             # tints the runes to the flame red
-	_rune_mat.albedo_texture = tex
-	_rune_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	_rune_additive = true
-	var quad := QuadMesh.new()
-	quad.size = Vector2(RADIUS * 2.0, RADIUS * 2.0)
-	var mi := MeshInstance3D.new()
-	mi.mesh = quad
-	mi.material_override = _rune_mat
-	mi.rotation.x = -PI / 2.0                   # lay flat, facing up
-	mi.position.y = 0.04
-	_runes.add_child(mi)
+	var decal := Decal.new()
+	decal.texture_albedo = tex                 # alpha masks the projection to the runes; rgb painted in DECAL_FLAME
+	decal.texture_emission = tex               # a hot emissive core inside the runes (untinted = bright; kept low)
+	decal.albedo_mix = 1.0                      # paint the runes onto the ground (modulate tints albedo in mobile)
+	decal.modulate = DECAL_FLAME               # flame-red; _set_glow pulses this for the fire flicker
+	decal.emission_energy = GLOW * DECAL_EMISSION
+	decal.size = Vector3(RADIUS * 2.0, 2.0, RADIUS * 2.0)
+	_rune_decal_node = decal
+	_runes.add_child(decal)
 
 
 ## Fallback when there's no rune art: a ring of short radial rune-marks (every 3rd
@@ -134,15 +132,18 @@ func _rune_marks() -> void:
 
 
 ## Drive the circle's brightness (runes + outline ring + ground light) to `level`,
-## where 1.0 is the base glow. Additive art is tinted via albedo; emissive parts
+## where 1.0 is the base glow. The projected decal and the emissive fallback parts both
 ## scale their emission energy.
 func _set_glow(level: float) -> void:
 	var e := GLOW * level
-	if _rune_additive:
-		_rune_mat.albedo_color = Color(FLAME.r * e, FLAME.g * e, FLAME.b * e, 1.0)
-	else:
+	if _rune_decal_node != null:
+		# Pulse the painted-rune colour (alpha stays 1 so coverage holds) + the hot core.
+		_rune_decal_node.modulate = Color(DECAL_FLAME.r * level, DECAL_FLAME.g * level, DECAL_FLAME.b * level, 1.0)
+		_rune_decal_node.emission_energy = e * DECAL_EMISSION
+	elif _rune_mat != null:
 		_rune_mat.emission_energy_multiplier = e
-	_ring_mat.emission_energy_multiplier = e
+	if _ring_mat != null:
+		_ring_mat.emission_energy_multiplier = e
 	_light.light_energy = 1.2 * level
 
 

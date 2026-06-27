@@ -91,7 +91,9 @@ func _scatter_point() -> Vector3:
 		if max_r <= 0.0:
 			continue
 		var r := _rng.randf_range(0.0, max_r)
-		var p := Vector3(cos(ang) * r, 0.0, sin(ang) * r)
+		var px := cos(ang) * r
+		var pz := sin(ang) * r
+		var p := Vector3(px, IslandShape.surface_height(px, pz), pz)
 		if p.distance_to(origin) >= MIN_FROM_PLAYER:
 			return p
 	return Vector3.ZERO         # fell through (marine cornered) -> centre is a fine fallback

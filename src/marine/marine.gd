@@ -351,7 +351,7 @@ func _handle_movement(delta: float) -> void:
 	# Push out of columns/lava and climb onto small rocks (island is at the origin, so
 	# this local position is also the world position).
 	if obstacles != null:
-		position = obstacles.resolve(position, BODY_RADIUS)
+		position = obstacles.resolve(position, BODY_RADIUS, IslandShape.surface_height(position.x, position.z))
 
 
 ## Yaw to face the point "between" the two hands' targets (their bisector). Falls

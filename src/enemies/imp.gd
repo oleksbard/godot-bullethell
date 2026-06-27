@@ -186,7 +186,7 @@ func _process(delta: float) -> void:
 
 	_clamp_to_island()                   # both the chase and the knockback stay on solid rock
 	if obstacles != null:
-		global_position = obstacles.resolve(global_position, BODY_RADIUS)   # round columns/lava, climb rocks
+		global_position = obstacles.resolve(global_position, BODY_RADIUS, IslandShape.surface_height(global_position.x, global_position.z))   # round columns/lava, climb rocks, follow the hills
 
 	if to_player.length() > 0.05:
 		rotation.y = atan2(-to_player.x, -to_player.z)   # always face the player (-Z forward)

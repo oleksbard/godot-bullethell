@@ -13,11 +13,11 @@ const GRADE_SHADER: Shader = preload("res://src/fx/screen_grade.gdshader")
 # Video grade (delivery-game DEFAULT_GRADE_PARAMS).
 const SHARPNESS := 1.0
 const CLARITY := 2.0
-const SATURATION := 1.35   # was 1.35; lowered — 1.35 over-pushed the scene's reds
+const SATURATION := 1.25   # was 1.35; lowered — 1.35 over-pushed the scene's reds
 
 # #1 cel / comic.
-const POSTERIZE_BANDS := 16.0      # luma bands (fewer = chunkier)
-const POSTERIZE_AMOUNT := 0.95     # 0 = off
+const POSTERIZE_BANDS := 0.0      # luma bands (fewer = chunkier)
+const POSTERIZE_AMOUNT := 0.0     # 0 = off
 const OUTLINE_STRENGTH := 0.7     # ink-edge darkening; 0 = off
 const OUTLINE_THRESHOLD := 0.1   # edge sensitivity (lower = more edges)
 

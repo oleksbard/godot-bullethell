@@ -56,8 +56,9 @@ func occupancy_count() -> int:
 
 
 ## Resolve a body at `pos` (radius `body_r`): push it out of every blocker it
-## overlaps in XZ, then lift it onto the tallest rock it stands over (0 = ground).
-func resolve(pos: Vector3, body_r: float) -> Vector3:
+## overlaps in XZ, then lift it onto the tallest rock it stands over — or onto the
+## `ground` baseline (the terrain height under the body) if it's on no rock.
+func resolve(pos: Vector3, body_r: float, ground: float = 0.0) -> Vector3:
 	var p := Vector2(pos.x, pos.z)
 	# A couple of relaxation passes so a body wedged against two blockers settles.
 	for _pass in 2:
@@ -71,8 +72,8 @@ func resolve(pos: Vector3, body_r: float) -> Vector3:
 					p = near + away / d * min_d
 				else:
 					p = near + Vector2(min_d, 0.0)   # dead centre on the segment: shove along +X
-	# Stand on top of the tallest rock whose disc we're over (else ground).
-	var top := 0.0
+	# Stand on top of the tallest rock whose disc we're over (else the ground baseline).
+	var top := ground
 	for s in steps:
 		if p.distance_to(s["c"]) < s["r"] and s["top"] > top:
 			top = s["top"]
