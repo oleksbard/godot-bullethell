@@ -43,4 +43,5 @@ jobs:
 
       - name: Art-skill self-test
         run: |
+          pip install --quiet Pillow
           python3 .claude/skills/add-item-art/process_item_art.py --selftest
