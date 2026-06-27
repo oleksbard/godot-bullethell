@@ -26,10 +26,9 @@ const PANEL_BG := Color(0.06, 0.02, 0.02, 0.92)
 const BTN_BG := Color(0.06, 0.02, 0.02, 0.92)
 const DROP_FLASH := Color(1.0, 0.85, 0.55, 0.5)   # warm flash over a freshly-dropped item
 const SHOP_SLOTS := 4                              # 4 rolled offers per level-up
-const BASE_PRICE := 10.0                           # souls; an offer's price = round(BASE_PRICE * level^PRICE_EXP)
-const PRICE_EXP := 1.5
 const UNAFFORDABLE := Color(0.7, 0.35, 0.3)        # price colour when you can't afford it
 const SOLD_DIM := Color(0.5, 0.5, 0.5, 0.8)        # icon tint for an unaffordable offer
+const SELL_HI := Color(0.45, 1.0, 0.55)            # sell-zone accent (green = you get paid)
 
 # Scaling: the centred content is sized to cover this fraction of the viewport's
 # limiting dimension (so it fills the screen but keeps its aspect), centred.
@@ -45,6 +44,7 @@ const BASE_PRICE_FONT := 22
 const BASE_LABEL_FONT := 26
 const BASE_BTN_FONT := 30
 const BASE_STUB := 64
+const BASE_SELL := Vector2(180, 52)   # sell drop-zone base size
 const BASE_TOOLTIP_FONT := 21
 const BASE_BTN_SIZE := Vector2(260, 64)
 const BASE_CONTENT_SEP := 18
@@ -73,6 +73,8 @@ var _offer_icons: Array[TextureRect] = []
 var _offer_prices: Array[Label] = []
 var _offers: Array = []             # per-slot {item, price, sold}
 var _rng := RandomNumberGenerator.new()  # rolls offers (tests can seed it)
+var _sell_zone: Panel               # drag an owned item here to sell it for 65%
+var _sell_label: Label
 var _continue: Button
 var _base_natural := Vector2.ZERO   # content's natural size at k = 1, measured once
 var _cell_size := BASE_CELL         # current scaled cell size (drives the ghost too)
@@ -193,6 +195,9 @@ func _build() -> void:
 	_backpack_view.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	_backpack_view.setup(inventory.backpack)
 	_right.add_child(_backpack_view)
+	_sell_zone = _make_sell_zone()
+	_right.add_child(_sell_zone)
+	_style_sell(false)
 	_continue = _make_button("CONTINUE", close)
 	_right.add_child(_continue)
 
@@ -238,6 +243,8 @@ func _set_sizes(k: float) -> void:
 		b.custom_minimum_size = Vector2(BASE_STUB, BASE_STUB) * k
 	for p in _offer_prices:
 		p.add_theme_font_size_override("font_size", maxi(7, roundi(BASE_PRICE_FONT * k)))
+	_sell_zone.custom_minimum_size = BASE_SELL * k
+	_sell_label.add_theme_font_size_override("font_size", maxi(6, roundi(BASE_LABEL_FONT * k)))
 	_content.add_theme_constant_override("separation", roundi(BASE_CONTENT_SEP * k))
 	_columns.add_theme_constant_override("separation", roundi(BASE_COL_SEP * k))
 	_left.add_theme_constant_override("separation", roundi(BASE_INCOL_SEP * k))
@@ -332,6 +339,11 @@ func _input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 		return
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+		# Holding an item and clicking the sell zone -> sell it for 65%.
+		if _held != null and _sell_zone.get_global_rect().has_point(event.position):
+			_sell_held()
+			get_viewport().set_input_as_handled()
+			return
 		# Only handle/consume clicks that land on a grid; clicks elsewhere must reach the
 		# GUI so the CONTINUE button (and any other Control) still receives them.
 		if not _view_and_cell(event.position).is_empty():
@@ -390,15 +402,22 @@ func _begin_hold(grid: Object, item: Object) -> void:
 ## Show the tooltip for the item under the cursor, or hide it when over empty space.
 func _update_tooltip(screen_pos: Vector2) -> void:
 	var it: Object = null
+	var price := -1                              # owned -> sell price; shop offer -> buy price
+	var is_buy := false
 	var hit := _view_and_cell(screen_pos)
 	if not hit.is_empty():
 		it = hit[1].item_at(hit[2])
+		if it != null:
+			price = it.sell_price()
 	else:
 		it = _offer_at(screen_pos)               # hovering a shop offer shows its stats too
+		if it != null:
+			price = it.buy_price()
+			is_buy = true
 	if it == null:
 		_tooltip.hide_tip()
 	else:
-		_tooltip.show_for(it, screen_pos, _tooltip_font)
+		_tooltip.show_for(it, screen_pos, _tooltip_font, price, is_buy)
 
 
 func _end_hold() -> void:
@@ -408,6 +427,7 @@ func _end_hold() -> void:
 	if _ghost != null:
 		_ghost.queue_free()
 		_ghost = null
+	_style_sell(false)
 
 
 ## Which view+grid+cell is under `screen_pos`? Returns [view, grid, cell] or [].
@@ -442,13 +462,8 @@ func _roll_offers() -> void:
 	var rb: float = stats.rarity_bonus if stats != null else 0.0
 	for i in SHOP_SLOTS:
 		var item := InventoryItemScript.rolled_pistol(player_level, rb, _rng)
-		_offers.append({"item": item, "price": _price_for(item), "sold": false})
+		_offers.append({"item": item, "price": item.buy_price(), "sold": false})
 		_refresh_offer(i)
-
-
-## Souls price for an item: round(BASE_PRICE * level^PRICE_EXP).
-func _price_for(item: Object) -> int:
-	return roundi(BASE_PRICE * pow(float(item.level()), PRICE_EXP))
 
 
 ## Paint offer slot `index`: icon, price, rarity border, and affordable/sold state.
@@ -507,6 +522,55 @@ func _offer_at(screen_pos: Vector2) -> Object:
 	return null
 
 
+# --- sell -------------------------------------------------------------------
+
+## A drop target: dragging an owned item onto it sells the item for 65% of its price.
+func _make_sell_zone() -> Panel:
+	var p := Panel.new()
+	p.custom_minimum_size = BASE_SELL
+	p.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	p.mouse_filter = Control.MOUSE_FILTER_IGNORE     # drops are detected by rect in _input, not via GUI
+	_sell_label = Label.new()
+	_sell_label.text = "SELL"
+	_sell_label.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_sell_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_sell_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_sell_label.add_theme_color_override("font_color", SELL_HI)
+	_sell_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	p.add_child(_sell_label)
+	return p
+
+
+## Border the sell zone — brighter green while a held item hovers it.
+func _style_sell(hot: bool) -> void:
+	if _sell_zone == null:
+		return
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = PANEL_BG
+	sb.border_color = SELL_HI if hot else EMBER_DIM
+	sb.set_border_width_all(3 if hot else 2)
+	sb.set_corner_radius_all(5)
+	_sell_zone.add_theme_stylebox_override("panel", sb)
+
+
+## Sell the held item for 65% of its price: credit souls, discard it (it was removed
+## from its grid on pick-up), and refresh. CONTINUE no longer has it to return.
+func _sell_held() -> void:
+	if _held == null or stats == null:
+		return
+	var amount: int = _held.sell_price()
+	stats.add_souls(amount)                          # emits souls_changed -> HUD + offers update
+	_souls_label.text = "%d SOULS" % stats.souls
+	var center := _sell_zone.get_global_rect().get_center()
+	_end_hold()                                      # discard: do NOT return the item to a grid
+	_sfx.play_drop()
+	UiFxScript.ring(_root, center, SELL_HI, _cell_size * 1.6, maxf(3.0, _cell_size * 0.12))
+	for i in _offers.size():                          # more souls -> some offers may now be affordable
+		_refresh_offer(i)
+	_refresh_views()
+	_style_sell(false)
+
+
 func _make_ghost() -> void:
 	_ghost = DragGhostScript.new()
 	_root.add_child(_ghost)
@@ -533,6 +597,7 @@ func _update_ghost(screen_pos: Vector2) -> void:
 	_ghost.position = base
 	_ghost.set_fit(fits)
 	_ghost.queue_redraw()                # reflect a SPACE-rotate (cells/icon change in place)
+	_style_sell(_sell_zone.get_global_rect().has_point(screen_pos))   # glow the sell zone when hovered
 
 
 ## A footprint's screen rect, for spawning pickup/drop FX over it.

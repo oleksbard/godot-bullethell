@@ -9,10 +9,14 @@ extends SceneTree
 ## so `_ready()` fires. See docs/guidelines/testing.md.
 
 const IslandShape := preload("res://src/lib/island_shape.gd")
+const ObstacleFieldScript := preload("res://src/world/obstacle_field.gd")
+const HellIsland := preload("res://src/world/hell_island.gd")
 const MarineScript := preload("res://src/marine/marine.gd")
 const PlayerStatsScript := preload("res://src/marine/player_stats.gd")
 const WaveSpawnerScript := preload("res://src/enemies/wave_spawner.gd")
 const WeaponRingScript := preload("res://src/weapons/weapon_ring.gd")
+const TurretMountScript := preload("res://src/weapons/turret_mount.gd")
+const StatusIconScript := preload("res://src/ui/status_icon.gd")
 const ImpScript := preload("res://src/enemies/imp.gd")
 const PortalScript := preload("res://src/fx/portal.gd")
 const ProjectileScript := preload("res://src/fx/projectile.gd")
@@ -81,9 +85,17 @@ func _initialize() -> void:
 	_test_rarity_roll()
 	_test_spend_souls()
 	await _test_gun_stats_from_item()
+	await _test_gun_reload()
+	await _test_status_icon()
+	await _test_reload_debuff()
+	await _test_turret_mount()
 	await _test_shop_offers()
+	await _test_sell_item()
 	_test_loadout_power()
 	await _test_wave_power_scaling()
+	_test_obstacle_field()
+	_test_island_no_overlap()
+	_test_marine_obstacle_push()
 	print("──")
 	print("%d passed, %d failed" % [_passed, _failed])
 	quit(1 if _failed > 0 else 0)
@@ -918,11 +930,12 @@ func _test_item_tooltip() -> void:
 	for r in rows:
 		shown[r[0]] = r[1]
 	_ok(shown.has("Damage") and shown["Damage"] == "5", "Damage shows as 5")
-	_ok(shown.has("Power") and shown["Power"] == "10", "Power shows as 10 (base pistol)")
+	_ok(not shown.has("Power"), "Power is no longer a stat row (it's an icon chip)")
 	_ok(not shown.has("Projectile"), "Projectile is no longer a stat row (it's a header tag)")
 	_ok(not shown.has("Piercing") and not shown.has("Ricochet"),
 		"zero-valued stats (Piercing/Ricochet) are hidden")
 	_ok(shown.has("Magazine") and shown["Magazine"] == "7", "Magazine shows 7")
+	_ok(shown.has("Reload") and shown["Reload"] == "2", "Reload shows as 2 (base pistol seconds)")
 
 	# Type + tags: pistol is a Gun and is tagged both Projectile and Gun.
 	_ok(p.type_name() == "Gun", "pistol Type is Gun")
@@ -947,6 +960,17 @@ func _test_grid_view() -> void:
 	_ok(gv.cell_origin(Vector2i(2, 1)).is_equal_approx(Vector2(step * 2, step)),
 		"cell_origin returns the cell's top-left pixel")
 	gv.free()
+
+	# Rarity backing: Normal gets none; non-Normal uses the shared rarity colour.
+	var normal := InventoryItemScript.pistol()
+	_ok(GridViewScript.rarity_bg(normal).a == 0.0, "Normal item has no rarity background")
+	var rare := InventoryItemScript.pistol()
+	rare.item_level = 3                                # -> Rare
+	var bg := GridViewScript.rarity_bg(rare)
+	var rare_col: Color = ItemTooltipScript.RARITY_COLORS["Rare"]
+	_ok(bg.a > 0.0, "a non-Normal item gets a rarity background")
+	_ok(is_equal_approx(bg.r, rare_col.r) and is_equal_approx(bg.g, rare_col.g) and is_equal_approx(bg.b, rare_col.b),
+		"the backing uses the existing assigned Rare colour")
 
 
 func _test_level_up_menu() -> void:
@@ -1095,6 +1119,18 @@ func _test_item_level_and_power() -> void:
 	_ok(roundi(p5.damage_value()) == 13, "level-5 damage is 13 (got %d)" % roundi(p5.damage_value()))
 	_ok(p5.power() > p1.power(), "higher level -> more power (%d > %d)" % [p5.power(), p1.power()])
 
+	# Buy/sell prices: buy = round(10 * level^1.5); sell = round(65% of buy).
+	_ok(p1.buy_price() == 10 and p1.sell_price() == roundi(10.0 * 0.65),
+		"L1 pistol buys for 10, sells for %d (got %d / %d)" % [roundi(10.0 * 0.65), p1.buy_price(), p1.sell_price()])
+	_ok(p5.buy_price() == 112 and p5.sell_price() == roundi(112.0 * 0.65),
+		"L5 pistol price scales (buy %d, sell %d)" % [p5.buy_price(), p5.sell_price()])
+
+	# Magazine + reload: 7 rounds; L1 reloads in 2.0s; higher level reloads faster.
+	_ok(p1.magazine_size() == 7, "pistol magazine is 7")
+	_ok(is_equal_approx(p1.reload_time_value(), 2.0), "L1 reload time is 2.0s (got %.2f)" % p1.reload_time_value())
+	_ok(p5.reload_time_value() < p1.reload_time_value(),
+		"a higher-level pistol reloads faster (%.2f < %.2f)" % [p5.reload_time_value(), p1.reload_time_value()])
+
 	# Power is strictly monotonic in level, and rarity bands map as designed.
 	var mono := true
 	var prev := 0
@@ -1183,6 +1219,104 @@ func _test_gun_stats_from_item() -> void:
 	holder.free()
 
 
+func _test_status_icon() -> void:
+	_suite = "StatusIcon"
+	var s: Control = StatusIconScript.new()
+	get_root().add_child(s)
+	await process_frame
+	s.set_state(3, 0.5, 1.2)
+	_ok(s._stacks == 3 and is_equal_approx(s._frac, 0.5) and is_equal_approx(s._seconds, 1.2),
+		"set_state stores stacks / cooldown fraction / seconds")
+	s.set_state(1, 2.0, 5.0)
+	_ok(is_equal_approx(s._frac, 1.0), "cooldown fraction is clamped to 1")
+	s.free()
+
+
+func _test_reload_debuff() -> void:
+	_suite = "Hud.debuff"
+	var holder := Node3D.new()
+	get_root().add_child(holder)
+	var m: Node3D = MarineScript.new()
+	holder.add_child(m)
+	var inv: Node = InventoryScript.build()
+	m.add_child(inv)
+	m.inventory = inv
+	var wr: Node3D = WeaponRingScript.new()
+	wr.player = m
+	holder.add_child(wr)
+	await process_frame                           # ring builds 2 guns from the 2 pistols
+
+	_ok(wr.reload_state()["count"] == 0, "no guns reloading -> count 0")
+	wr._guns[0]._start_reload()
+	var st: Dictionary = wr.reload_state()
+	_ok(st["count"] == 1, "one reloading gun -> count 1")
+	_ok(st["frac"] > 0.9, "a fresh reload reads near full (%.2f)" % st["frac"])
+
+	var hud: CanvasLayer = HudScript.new()
+	var pstats: Node = PlayerStatsScript.new()
+	hud.stats = pstats
+	hud.weapon_ring = wr
+	get_root().add_child(hud)
+	await process_frame
+	hud._update_reload_debuff()
+	_ok(hud._reload_icon.visible, "HUD shows the reload debuff while a gun reloads")
+	_ok(hud._reload_icon._stacks == 1, "debuff stack matches one reloading gun")
+
+	wr._guns[1]._start_reload()
+	hud._update_reload_debuff()
+	_ok(hud._reload_icon._stacks == 2, "debuff stacks with the number of reloading guns")
+
+	wr._guns[0]._finish_reload()
+	wr._guns[1]._finish_reload()
+	hud._update_reload_debuff()
+	_ok(not hud._reload_icon.visible, "debuff hides once no gun is reloading")
+
+	hud.free()
+	pstats.free()
+	holder.free()
+
+
+func _test_gun_reload() -> void:
+	_suite = "Gun.reload"
+	var holder := Node3D.new()
+	get_root().add_child(holder)
+	var g: Node3D = GunScript.new()
+	g.mag_size = 3
+	g.reload_time = 0.5
+	g.fire_interval = 0.0                         # fire whenever off cooldown, so we can empty fast
+	var shots := [0]
+	g.fired.connect(func(_o: Vector3, _t: Node3D, _d: float) -> void: shots[0] += 1)
+	holder.add_child(g)                           # _ready -> _ammo = mag_size (3)
+	await process_frame
+	var target := Node3D.new()
+	holder.add_child(target)
+	target.global_position = Vector3(0.0, 0.0, -2.0)
+	g.set_target(target)
+
+	for i in 12:                                  # empties the magazine, then can't fire while reloading
+		g._process(0.05)
+	_ok(shots[0] == 3, "fires exactly one magazine (3) then stops to reload (got %d)" % shots[0])
+	_ok(g._reloading, "the gun is reloading after the magazine empties")
+
+	g._process(0.6)                               # wait out the 0.5s reload
+	_ok(not g._reloading and g._ammo == 3, "reload completes and refills the magazine")
+	g._process(0.05)
+	_ok(shots[0] == 4, "the gun fires again after reloading (got %d)" % shots[0])
+	holder.free()
+
+
+func _test_turret_mount() -> void:
+	_suite = "TurretMount"
+	var t: Node3D = TurretMountScript.new()
+	get_root().add_child(t)
+	await process_frame                           # _ready builds the strut + ball
+	t.set_span(Vector3(0.0, 1.0, 0.0), Vector3(1.0, 1.0, 0.0))
+	_ok(t._strut.position.is_equal_approx(Vector3(0.5, 1.0, 0.0)), "strut sits at the midpoint of the span")
+	_ok(absf(t._strut.scale.z - 1.0) < 0.001, "strut length spans from->to (z scale %.2f)" % t._strut.scale.z)
+	_ok(t._ball.position.is_equal_approx(Vector3(1.0, 1.0, 0.0)), "pivot ball seats at the far (gun) end")
+	t.free()
+
+
 func _test_shop_offers() -> void:
 	_suite = "LevelUpMenu.shop"
 	var inv: Node = InventoryScript.build()
@@ -1214,6 +1348,32 @@ func _test_shop_offers() -> void:
 	menu._buy(1)
 	_ok(inv.stash.items_in_reading_order().size() == stash_now, "an unaffordable offer can't be bought")
 
+	paused = false
+	menu.free()
+	inv.free()
+	st.free()
+
+
+func _test_sell_item() -> void:
+	_suite = "LevelUpMenu.sell"
+	var inv: Node = InventoryScript.build()
+	var st: Node = PlayerStatsScript.new()
+	st.souls = 0
+	var menu: CanvasLayer = LevelUpMenuScript.new()
+	menu.inventory = inv
+	menu.stats = st
+	get_root().add_child(menu)
+	await process_frame
+	menu.open(2)
+	var p: Object = inv.equipped_pistols()[0]
+	var sp: int = p.sell_price()
+	menu._begin_hold(inv.backpack, p)             # pick it up (a UI click does this)
+	_ok(inv.equipped_pistols().size() == 1, "held pistol is unequipped")
+	menu._sell_held()                             # drop on the sell zone
+	_ok(st.souls == sp, "selling credits the 65%% price (souls %d == %d)" % [st.souls, sp])
+	_ok(menu._held == null, "the sold item is no longer held")
+	menu.close()
+	_ok(inv.equipped_pistols().size() == 1, "close() does not resurrect the sold pistol")
 	paused = false
 	menu.free()
 	inv.free()
@@ -1270,6 +1430,99 @@ func _test_wave_power_scaling() -> void:
 	h1.free()
 	h2.free()
 	inv.free()
+
+
+## ObstacleField: blockers push a body out, lava capsules too, steps lift it on top,
+## and the overlap test rejects stacked footprints (with a limit cutoff).
+func _test_obstacle_field() -> void:
+	_suite = "ObstacleField"
+	var f: ObstacleFieldScript = ObstacleFieldScript.new()
+	f.add_block(Vector2.ZERO, 1.0)
+
+	# A body inside the blocker is pushed out to its radius + the body radius.
+	var out: Vector3 = f.resolve(Vector3(0.3, 0.0, 0.0), 0.5)
+	var od := Vector2(out.x, out.z).length()
+	_ok(is_equal_approx(od, 1.5), "blocker pushes a body out to r + body_r (%.3f)" % od)
+
+	# A body well clear of every blocker is left where it is, on the ground.
+	var clear: Vector3 = f.resolve(Vector3(5.0, 0.0, 0.0), 0.5)
+	_ok(clear.is_equal_approx(Vector3(5.0, 0.0, 0.0)), "a body clear of obstacles is untouched")
+
+	# Capsule blocker (a != b): closest point is on the segment, body shoved off it.
+	var g: ObstacleFieldScript = ObstacleFieldScript.new()
+	g.blockers.append({"a": Vector2(0.0, 0.0), "b": Vector2(2.0, 0.0), "r": 0.1})
+	var lv: Vector3 = g.resolve(Vector3(1.0, 0.0, 0.2), 0.3)
+	_ok(is_equal_approx(lv.z, 0.4) and is_equal_approx(lv.x, 1.0),
+		"capsule blocker pushes a body off the segment (z=%.3f)" % lv.z)
+
+	# Thin lava is decoration: it reserves a footprint but never blocks.
+	var dec: ObstacleFieldScript = ObstacleFieldScript.new()
+	dec.add_decor(Vector2.ZERO, 1.0)
+	var through: Vector3 = dec.resolve(Vector3(0.1, 0.0, 0.0), 0.4)
+	_ok(through.is_equal_approx(Vector3(0.1, 0.0, 0.0)), "passable lava decoration never pushes a body")
+	_ok(dec.overlaps(Vector2(0.5, 0.0), 0.2), "lava decoration still reserves its footprint")
+
+	# Step: a body over the disc is lifted onto its top; off it, back to the ground.
+	var s: ObstacleFieldScript = ObstacleFieldScript.new()
+	s.add_step(Vector2.ZERO, 1.0, 0.6)
+	var on_top: Vector3 = s.resolve(Vector3(0.2, 0.0, 0.0), 0.4)
+	var off: Vector3 = s.resolve(Vector3(5.0, 0.0, 0.0), 0.4)
+	_ok(is_equal_approx(on_top.y, 0.6), "step lifts a body onto its top")
+	_ok(is_equal_approx(off.y, 0.0), "off the step, the body is back on the ground")
+
+	# overlaps(): rejects a footprint touching a placed one; limit caps the scan.
+	var o: ObstacleFieldScript = ObstacleFieldScript.new()
+	o.add_block(Vector2.ZERO, 1.0)
+	_ok(o.overlaps(Vector2(1.0, 0.0), 0.5), "overlaps() flags a footprint inside an existing one")
+	_ok(not o.overlaps(Vector2(2.0, 0.0), 0.5), "overlaps() clears a footprint that only just misses")
+	o.add_block(Vector2(2.0, 0.0), 1.0)
+	_ok(not o.overlaps(Vector2(2.0, 0.0), 0.5, 1), "overlaps(limit) ignores footprints past the cutoff")
+
+
+## Generation guarantee: no two solid footprints (columns + rocks) are stacked.
+func _test_island_no_overlap() -> void:
+	_suite = "HellIsland.layout"
+	var island: Node3D = HellIsland.build()
+	var field: ObstacleFieldScript = island.get_meta("obstacles")
+
+	# Gather the discrete footprints: spires (point-blockers, a == b) + step rocks.
+	var foot: Array = []
+	for blk in field.blockers:
+		if (blk["a"] as Vector2).is_equal_approx(blk["b"]):
+			foot.append({"c": blk["a"], "r": blk["r"]})
+	for st in field.steps:
+		foot.append({"c": st["c"], "r": st["r"]})
+
+	var clean := true
+	for i in foot.size():
+		for j in range(i + 1, foot.size()):
+			var dist: float = (foot[i]["c"] as Vector2).distance_to(foot[j]["c"])
+			if dist < foot[i]["r"] + foot[j]["r"] - 0.001:
+				clean = false
+	_ok(foot.size() > 10, "the island places a decent field of obstacles (%d)" % foot.size())
+	_ok(clean, "no two columns/rocks are stacked on each other")
+	island.free()
+
+
+## The marine's movement step rounds it out of a column and climbs it onto a rock.
+func _test_marine_obstacle_push() -> void:
+	_suite = "Marine.obstacle"
+	var blocked: ObstacleFieldScript = ObstacleFieldScript.new()
+	blocked.add_block(Vector2.ZERO, 1.0)
+	var m: Node3D = MarineScript.new()            # not in tree: movement step needs no rig
+	m.obstacles = blocked
+	m.position = Vector3(0.3, 0.0, 0.0)            # inside the column
+	m._handle_movement(0.016)                      # no keys -> resolve still pushes out
+	var d := Vector2(m.position.x, m.position.z).length()
+	_ok(d >= 1.0 + MarineScript.BODY_RADIUS - 0.01, "a column shoves the marine clear (%.2f)" % d)
+
+	var stepped: ObstacleFieldScript = ObstacleFieldScript.new()
+	stepped.add_step(Vector2.ZERO, 2.0, 0.5)
+	m.obstacles = stepped
+	m.position = Vector3(0.0, 0.0, 0.0)
+	m._handle_movement(0.016)
+	_ok(is_equal_approx(m.position.y, 0.5), "the marine climbs onto a rock (y=%.2f)" % m.position.y)
+	m.free()
 
 
 ## Sort a cell array by (row, col) so set-equality can use ==.

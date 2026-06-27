@@ -21,20 +21,28 @@ const XpOrbFieldScript := preload("res://src/loot/xp_orb_field.gd")
 const ScreenGradeScript := preload("res://src/fx/screen_grade.gd")
 const InventoryScript := preload("res://src/inventory/inventory.gd")
 const LevelUpMenuScript := preload("res://src/ui/level_up_menu.gd")
+const ObstacleFieldScript := preload("res://src/world/obstacle_field.gd")
 
 const CAM_OFFSET := Vector3(0.0, 13.0, 7.0)
 const CAM_SIZE := 18.0             # orthographic vertical extent (smaller = closer)
 const DEATH_MENU_DELAY := 0.9      # let the death topple play before the menu pops
 
+const COLUMN_FOCUS_Y := 1.1        # aim the x-ray window at the marine's torso, not its feet
+
 var marine: Node3D
 var camera: Camera3D
 var game_over: CanvasLayer
+var _column_mats: Array = []       # column x-ray materials, fed the marine's position each frame
 
 
 func _ready() -> void:
+	Engine.max_fps = 60               # cap render rate (vsync may allow 120 on ProMotion) — halves GPU heat
 	_build_environment()
 	_build_key_light()
-	add_child(HellIsland.build())
+	var island := HellIsland.build()
+	add_child(island)
+	var obstacles: ObstacleFieldScript = island.get_meta("obstacles")   # columns/lava/rocks for movement
+	_column_mats = island.get_meta("column_mats")   # x-ray columns, fed the marine pos in _process
 
 	# preload by path (not bare class_name) so loading doesn't depend on the editor
 	# having built the global class cache — works on a cold clone / CI.
@@ -50,6 +58,7 @@ func _ready() -> void:
 	var inventory := InventoryScript.build()
 	marine.add_child(inventory)
 	marine.inventory = inventory
+	marine.obstacles = obstacles    # columns/lava block the marine; small rocks lift it
 
 	# XP orbs dropped by dead imps, magnetised to the marine.
 	var loot := XpOrbFieldScript.new()
@@ -74,6 +83,7 @@ func _ready() -> void:
 	var spawner := WaveSpawnerScript.new()
 	spawner.player = marine
 	spawner.inventory = inventory   # read equipped loadout power to scale each wave
+	spawner.obstacles = obstacles   # handed to each imp so columns/lava block it too
 	spawner.imp_spawned.connect(loot.on_imp_spawned)
 	spawner.wave_cleared.connect(loot.vacuum_all)
 	spawner.wave_started.connect(hud.on_wave_started)
@@ -82,6 +92,7 @@ func _ready() -> void:
 	# Guns floating around the marine, auto-aiming at the closest imps.
 	var weapons := WeaponRingScript.new()
 	weapons.player = marine
+	hud.weapon_ring = weapons        # HUD polls it for the reload debuff
 	add_child(weapons)
 
 	# Battle music — random track, quiet, fades out when no imps are alive.
@@ -132,7 +143,7 @@ func _build_environment() -> void:
 
 	# Glow so emissive ember rocks bloom like coals.
 	env.glow_enabled = true
-	env.glow_intensity = 0.9
+	env.glow_intensity = 1.15   # was 0.9; amped so embers bloom hotter (#5) — threshold below keeps the ground out
 	env.glow_strength = 1.05
 	env.glow_bloom = 0.2
 	env.glow_blend_mode = Environment.GLOW_BLEND_MODE_ADDITIVE
@@ -141,8 +152,9 @@ func _build_environment() -> void:
 	env.set_glow_level(4, 1.0)
 	env.set_glow_level(5, 1.0)
 
-	# SSAO grounds the marine + rocks onto the surface.
-	env.ssao_enabled = true
+	# SSAO grounds the marine + rocks onto the surface. Forward+/Compatibility only —
+	# the Mobile renderer ignores it (and warns), so it's off. Re-enable if you switch back.
+	env.ssao_enabled = false
 	env.ssao_radius = 0.7
 	env.ssao_intensity = 1.2
 
@@ -174,4 +186,14 @@ func _build_camera() -> void:
 func _process(_delta: float) -> void:
 	if marine == null or camera == null:
 		return
-	camera.global_position = marine.global_position + CAM_OFFSET
+	# Follow the marine on the ground plane only — don't lift the camera when it
+	# climbs onto a rock (its Y rises; the camera should hold steady).
+	var foot := marine.global_position
+	foot.y = 0.0
+	camera.global_position = foot + CAM_OFFSET
+
+	# Feed the marine's torso to the x-ray columns so each opens its window where the
+	# marine is hidden behind it.
+	var focus := marine.global_position + Vector3(0.0, COLUMN_FOCUS_Y, 0.0)
+	for m in _column_mats:
+		(m as ShaderMaterial).set_shader_parameter("player_world", focus)

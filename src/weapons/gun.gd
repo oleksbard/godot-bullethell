@@ -13,31 +13,45 @@ signal fired(origin: Vector3, target: Node3D, damage: float)
 const TURN_SPEED := 18.0
 const FIRE_INTERVAL := 1.7
 const DAMAGE := 5.0            # base pistol damage per bolt (marine power is fixed — no upgrades yet)
+const MAG_SIZE := 7            # bolts per magazine before a reload (matches InventoryItem.MAGAZINE)
+const RELOAD_TIME := 2.0       # seconds to reload an emptied magazine (base pistol)
 const FLASH_ENERGY := 6.0      # peak muzzle-flash brightness
 const FLASH_DECAY := 40.0      # energy/sec falloff — a quick realistic pop
 const FLASH_SIZE := 0.55       # muzzle-flash sprite size (world units)
 const BARREL_TIP := Vector3(0.0, 0.02, -0.34)   # muzzle of the pistol barrel
+
+const BODY_COLOR := Color(0.16, 0.16, 0.18)     # dark gunmetal (restored after a reload)
+const RELOAD_COLOR := Color(0.85, 0.12, 0.06)   # red while reloading
+const RELOAD_ALPHA_MIN := 0.25                  # reload tint starts faint and fills opaque as it completes
 
 # When held in a hand, the marine's body aims the gun (the WeaponRing locks its
 # orientation to the body's forward), so the gun skips its own yaw.
 var held := false
 
 # Per-instance combat stats, defaulting to the base pistol. The WeaponRing sets
-# these from the equipped item, so a higher-level pistol really shoots harder/faster.
+# these from the equipped item, so a higher-level pistol really shoots harder/faster
+# and reloads quicker.
 var damage := DAMAGE
 var fire_interval := FIRE_INTERVAL
+var mag_size := MAG_SIZE
+var reload_time := RELOAD_TIME
 
 static var _shared_flash_tex: Texture2D   # soft round flash sprite, shared by all guns
 
 var _target: Node3D
 var _cooldown := 0.0
+var _ammo := 0                 # bolts left in the magazine; refills after a reload
+var _reloading := false
+var _reload_left := 0.0        # seconds left in the current reload
 var _flash: OmniLight3D
 var _flash_quad: MeshInstance3D
 var _flash_mat: StandardMaterial3D
+var _body_mat: StandardMaterial3D   # the gun body's material, tinted red while reloading
 
 
 func _ready() -> void:
 	_build_body()
+	_ammo = mag_size
 
 
 func set_target(t: Node3D) -> void:
@@ -71,9 +85,12 @@ func _process(delta: float) -> void:
 				want_yaw = atan2(-to.x, -to.z)
 		rotation.y = lerp_angle(rotation.y, want_yaw, clampf(delta * TURN_SPEED, 0.0, 1.0))
 
-	# Fire on cooldown when there's something to shoot.
+	# Reload, or fire on cooldown when there's something to shoot. While reloading the
+	# gun can't fire — it tints red and fills back to opaque over reload_time.
 	_cooldown -= delta
-	if is_instance_valid(_target) and _cooldown <= 0.0:
+	if _reloading:
+		_tick_reload(delta)
+	elif is_instance_valid(_target) and _cooldown <= 0.0:
 		_fire()
 
 	# Muzzle flash (light + sprite) decays back to dark.
@@ -90,14 +107,64 @@ func _fire() -> void:
 	_flash_quad.scale = Vector3.ONE * randf_range(0.85, 1.3)   # vary so shots don't look identical
 	_flash_quad.visible = true
 	fired.emit(to_global(BARREL_TIP), _target, damage)
+	_ammo -= 1
+	if _ammo <= 0:
+		_start_reload()
+
+
+## Empty magazine -> begin a reload: switch the body material to alpha so the red
+## tint can fill in over reload_time (see _tick_reload).
+func _start_reload() -> void:
+	_reloading = true
+	_reload_left = reload_time
+	if _body_mat != null:
+		_body_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+
+
+## Animate the reload: the gun glows red and grows from faint to fully opaque as it
+## nears completion (a visible reload meter on the gun itself, like the imp hit flash).
+func _tick_reload(delta: float) -> void:
+	_reload_left -= delta
+	if _reload_left <= 0.0:
+		_finish_reload()
+		return
+	if _body_mat != null:
+		var progress := 1.0 - _reload_left / reload_time      # 0 -> 1 as it reloads
+		var a := lerpf(RELOAD_ALPHA_MIN, 1.0, progress)
+		_body_mat.albedo_color = Color(RELOAD_COLOR.r, RELOAD_COLOR.g, RELOAD_COLOR.b, a)
+
+
+## Reload done: refill the magazine and restore the normal gunmetal look.
+func _finish_reload() -> void:
+	_reloading = false
+	_ammo = mag_size
+	if _body_mat != null:
+		_body_mat.transparency = BaseMaterial3D.TRANSPARENCY_DISABLED
+		_body_mat.albedo_color = BODY_COLOR
+
+
+## --- reload status (read by the WeaponRing for the HUD's reload debuff) ---
+
+func is_reloading() -> bool:
+	return _reloading
+
+
+func reload_remaining() -> float:
+	return _reload_left
+
+
+## Fraction of the reload still left (1 at the start, 0 when done).
+func reload_fraction() -> float:
+	return _reload_left / reload_time if reload_time > 0.0 else 0.0
 
 
 func _build_body() -> void:
 	# A small pistol: a low slide, a stubby barrel out the -Z front, and a raked
 	# grip below. Roughly hand-sized so it sits naturally in the marine's grip.
 	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.16, 0.16, 0.18)
+	mat.albedo_color = BODY_COLOR
 	mat.metallic = 0.5
+	_body_mat = mat              # kept so reload can tint it red + animate its alpha
 	mat.roughness = 0.45
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 

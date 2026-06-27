@@ -9,14 +9,15 @@ signal died(world_pos: Vector3, xp_value: float)   # for the XP-orb field; emitt
 
 const Gore := preload("res://src/fx/gore.gd")
 const DamageNumberScript := preload("res://src/fx/damage_number.gd")
-const BlobShadow := preload("res://src/fx/blob_shadow.gd")
 const IslandShape := preload("res://src/lib/island_shape.gd")
+const ObstacleFieldScript := preload("res://src/world/obstacle_field.gd")
 const MODEL: PackedScene = preload("res://models/imp_opt.glb")
 const ANIM_SHADER: Shader = preload("res://src/enemies/imp_anim.gdshader")
 
 const GROUP := "imps"
 const SPEED := 2.3           # drift toward the player (set 0 for static)
 const EDGE_MARGIN := 0.6     # keep the imp this far inside the coast (can't chase onto the void)
+const BODY_RADIUS := 0.4     # collision radius vs. columns + lava
 const STOP_DIST := 0.8       # don't climb onto the player
 const SEP_RADIUS := 1.2      # personal space — push apart inside this
 const SEP_WEIGHT := 1.6      # how hard separation overrides the pull to the player
@@ -54,6 +55,7 @@ const HIT_SLOW_TIME := 0.45    # seconds of reduced speed after a hit
 const HIT_SLOW_FACTOR := 0.45  # speed multiplier while slowed
 
 var player: Node3D
+var obstacles: ObstacleFieldScript   # island columns/lava/rocks; set by the spawner
 var max_hp := BASE_HP
 var hp := BASE_HP                # set by the spawner per wave; depleted by take_damage()
 var attack_damage := BASE_ATTACK_DAMAGE   # damage per melee hit; spawner scales per wave
@@ -183,6 +185,8 @@ func _process(delta: float) -> void:
 		_knock = _knock.move_toward(Vector3.ZERO, KNOCKBACK_DAMP * delta)
 
 	_clamp_to_island()                   # both the chase and the knockback stay on solid rock
+	if obstacles != null:
+		global_position = obstacles.resolve(global_position, BODY_RADIUS)   # round columns/lava, climb rocks
 
 	if to_player.length() > 0.05:
 		rotation.y = atan2(-to_player.x, -to_player.z)   # always face the player (-Z forward)
@@ -248,7 +252,6 @@ func _build_model() -> void:
 	add_child(model)
 	_fit_model(model)
 	_model = model
-	add_child(BlobShadow.make(0.7))   # cheap fake shadow; the swarm skips real shadow casting (below)
 
 	var fdir := Vector3(0.0, 0.0, -1.0).rotated(Vector3.UP, -MODEL_YAW)   # node-forward, in mesh-local space
 	for mi in model.find_children("*", "MeshInstance3D", true, false):
@@ -273,7 +276,7 @@ func _build_model() -> void:
 		mat.set_shader_parameter("eye_radius", EYE_RADIUS)
 		mat.set_shader_parameter("eye_emission", Vector3(EYE_COLOR.r, EYE_COLOR.g, EYE_COLOR.b))
 		mat.set_shader_parameter("eye_energy", EYE_ENERGY)
-		mesh_inst.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF   # swarm uses the blob, not a shadow-map pass
+		mesh_inst.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF   # imps cast no shadow
 		mesh_inst.material_override = mat
 		_anim_mats.append(mat)
 

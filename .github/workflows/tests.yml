@@ -1,0 +1,46 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Pin to the project's engine version (project.godot config/features). Bump both here
+# and there together. Asset names follow the official GitHub release convention.
+env:
+  GODOT_VERSION: "4.7-stable"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Godot ${{ env.GODOT_VERSION }} (headless)
+        run: |
+          base="Godot_v${GODOT_VERSION}_linux.x86_64"
+          curl -fsSL -o godot.zip \
+            "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}/${base}.zip"
+          unzip -q godot.zip
+          chmod +x "$base"
+          echo "GODOT=$PWD/$base" >> "$GITHUB_ENV"
+
+      - name: Import assets (build the import cache a cold clone lacks)
+        run: |
+          "$GODOT" --headless --path . --import
+
+      - name: Run test suite
+        run: |
+          ./test/run_tests.sh
+
+      - name: Boot smoke test (no parse / _ready errors)
+        run: |
+          out=$("$GODOT" --headless --path . --quit-after 120 2>&1 || true)
+          echo "$out"
+          if echo "$out" | grep -qiE 'SCRIPT ERROR|Parse Error|Failed loading'; then
+            echo "::error::parse or runtime errors during boot"; exit 1
+          fi
+
+      - name: Art-skill self-test
+        run: |
+          python3 .claude/skills/add-item-art/process_item_art.py --selftest

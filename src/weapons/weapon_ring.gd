@@ -12,11 +12,14 @@ const ImpScript := preload("res://src/enemies/imp.gd")
 const ProjectileScript := preload("res://src/fx/projectile.gd")
 const ShotSfxScript := preload("res://src/audio/shot_sfx.gd")
 const ImpactSfxScript := preload("res://src/audio/impact_sfx.gd")
+const TurretMountScript := preload("res://src/weapons/turret_mount.gd")
 
 const RADIUS := 0.8          # how far the floating guns sit from the player
 const HEIGHT := 1.0          # float height (~hand height)
 const BOB_AMP := 0.08
 const BOB_FREQ := 2.0
+const TURRET_ANCHOR := Vector3(0.0, 1.25, 0.0)   # torso hub the floating-gun struts spring from (player-local)
+const TURRET_BALL_DROP := 0.07                    # seat the gun just above its pivot ball
 const HELD_SEAT := 0.17      # seat the held gun forward of the wrist, into the palm, along the barrel
 const HELD_LIFT := 0.12      # raise the held gun a touch so it sits up in the hand, not sunk
 
@@ -31,6 +34,7 @@ var player: Node3D
 var _inventory: Node         # Inventory (or null -> fall back to gun_count)
 var _guns: Array[Node3D] = []
 var _mounts: Array = []      # per-gun hand mount (Node3D) or null if it floats
+var _turrets: Array = []     # per-gun TurretMount (floating guns) or null (held guns)
 var _bob := 0.0
 var _sfx: Node
 var _impact: Node
@@ -57,8 +61,12 @@ func _ready() -> void:
 func _rebuild() -> void:
 	for g in _guns:
 		g.queue_free()
+	for t in _turrets:
+		if t != null:
+			t.queue_free()
 	_guns.clear()
 	_mounts.clear()
+	_turrets.clear()
 
 	var hands: Array = []
 	if player != null and player.has_method("get_hand_mounts"):
@@ -77,14 +85,20 @@ func _rebuild() -> void:
 		if i < pistols.size():
 			g.damage = pistols[i].damage_value()
 			g.fire_interval = pistols[i].fire_interval_value()
+			g.mag_size = pistols[i].magazine_size()
+			g.reload_time = pistols[i].reload_time_value()
 		# Stagger first shots so the guns fire individually, not in lockstep.
 		g.stagger(GunScript.FIRE_INTERVAL * float(i) / float(maxi(n, 1)))
 		add_child(g)
 		if i < hands.size():
 			g.held = true
 			_mounts.append(hands[i])              # grip reference; marine aims it
+			_turrets.append(null)                 # held guns ride the arm, no turret
 		else:
 			_mounts.append(null)
+			var turret: Node3D = TurretMountScript.new()   # floating gun: mount it on a procedural turret arm
+			add_child(turret)
+			_turrets.append(turret)
 		_guns.append(g)
 
 
@@ -109,9 +123,15 @@ func _process(delta: float) -> void:
 			var b := grip.global_transform.basis.orthonormalized()
 			_guns[i].global_transform = Transform3D(b, grip.global_position + (-b.z) * HELD_SEAT + Vector3.UP * HELD_LIFT)
 		else:
-			var ang := TAU * float(float_i) / float(maxi(float_total, 1))
+			# Slots are spaced evenly and rotate WITH the marine's body, so they keep a
+			# fixed position around the model as it turns (the ring node itself stays
+			# unrotated, so the gun's own aim yaw is unaffected).
+			var ang := TAU * float(float_i) / float(maxi(float_total, 1)) + player.rotation.y
 			var y := HEIGHT + sin(_bob + float(i)) * BOB_AMP
-			_guns[i].position = Vector3(cos(ang) * RADIUS, y, sin(ang) * RADIUS)
+			var slot := Vector3(cos(ang) * RADIUS, y, sin(ang) * RADIUS)
+			_guns[i].position = slot
+			if _turrets[i] != null:
+				_turrets[i].set_span(TURRET_ANCHOR, slot - Vector3(0.0, TURRET_BALL_DROP, 0.0))
 			float_i += 1
 
 
@@ -136,6 +156,21 @@ func _assign_targets() -> void:
 			_guns[i].set_target(t)
 		else:
 			_guns[i].clear_target()           # nothing in range -> this gun holds fire
+
+
+## Aggregate reload state for the HUD's reload debuff: how many guns are reloading,
+## plus the longest remaining fraction (0..1) and seconds — these drive the cooldown
+## sweep so it empties exactly as the last gun finishes.
+func reload_state() -> Dictionary:
+	var count := 0
+	var frac := 0.0
+	var seconds := 0.0
+	for g in _guns:
+		if is_instance_valid(g) and g.is_reloading():
+			count += 1
+			frac = maxf(frac, g.reload_fraction())
+			seconds = maxf(seconds, g.reload_remaining())
+	return {"count": count, "frac": frac, "seconds": seconds}
 
 
 ## A gun fired — spawn a bolt in world space (under our parent, the composition

@@ -5,9 +5,12 @@ extends Control
 ## a local mouse position to a grid cell so the LevelUpMenu can pick/place. Pure view:
 ## it reads the grid live and redraws; it never mutates the grid.
 
+const ItemTooltipScript := preload("res://src/ui/item_tooltip.gd")   # shared rarity palette
+
 const CELL := 44                  # px per cell
 const GAP := 2                    # px between cells
 const ITEM_INSET := 3.0           # shrink item blocks so the slot grid shows through
+const RARITY_BG_ALPHA := 0.30     # translucency of the rarity backing behind non-Normal items
 
 const SLOT_BG := Color(0.05, 0.02, 0.02, 0.9)
 const SLOT_BORDER := Color(0.62, 0.22, 0.1)
@@ -58,6 +61,10 @@ func _draw() -> void:
 		draw_rect(r, SLOT_BORDER, false, 2.0)
 	for item in grid.items_in_reading_order():
 		var origin: Vector2i = grid.origin_of[item]
+		var bg := rarity_bg(item)                  # rarity-tinted backing for non-Normal items
+		if bg.a > 0.0:
+			for c in item.cells():
+				draw_rect(Rect2(cell_origin(origin + c), Vector2(cell_size, cell_size)), bg)
 		var tex := icon_for(item)
 		if tex != null:
 			draw_icon(self, tex, item, cell_origin(origin), cell_size)
@@ -80,6 +87,17 @@ func _span() -> Vector2:
 
 func _item_color(_item: Object) -> Color:
 	return PISTOL_COLOR            # only pistols exist now; key on kind later
+
+
+## Translucent rarity backing for an item, or fully-transparent for Normal (no tint).
+## Uses the shared rarity palette so it matches the tooltip / shop borders. Static so
+## it's testable and so any item view can reuse it. (Does NOT touch the drag ghost.)
+static func rarity_bg(item: Object) -> Color:
+	var rarity: String = item.rarity()
+	if rarity == "Normal":
+		return Color(0.0, 0.0, 0.0, 0.0)
+	var base: Color = ItemTooltipScript.RARITY_COLORS.get(rarity, Color(0.0, 0.0, 0.0, 0.0))
+	return Color(base.r, base.g, base.b, RARITY_BG_ALPHA)
 
 
 ## Cached rot-0 icon for an item's kind, or null if no art file exists. Static +

@@ -26,12 +26,13 @@ signal died                  # emitted once when health hits 0 (Main shows the g
 const IslandShape := preload("res://src/lib/island_shape.gd")
 const ImpScript := preload("res://src/enemies/imp.gd")
 const DamageNumberScript := preload("res://src/fx/damage_number.gd")
-const BlobShadow := preload("res://src/fx/blob_shadow.gd")
+const ObstacleFieldScript := preload("res://src/world/obstacle_field.gd")
 const MODEL: PackedScene = preload("res://models/marine_01.glb")
 
 const SPEED := 6.0
 const TURN_SPEED := 12.0
 const EDGE_MARGIN := 1.0
+const BODY_RADIUS := 0.45            # collision radius vs. columns + lava
 
 # Fitting the imported model. marine_01.glb faces +Z but Godot/the controller
 # forward is -Z, so it needs a 180° yaw or it walks backward.
@@ -86,6 +87,7 @@ var _walk_amt := 0.0
 
 var stats: Node                        # PlayerStats holding health/xp; set by Main
 var inventory: Node                    # Inventory holding the grid loadout; set by Main
+var obstacles: ObstacleFieldScript     # island columns/lava/rocks; set by Main
 var _alive := true
 var _flash_mats: Array[StandardMaterial3D] = []   # duplicated model materials we pulse white on hit
 var _flash := 0.0                      # seconds left of the hurt-flash
@@ -135,6 +137,7 @@ func _setup_flash_mats() -> void:
 		return
 	for mi in _model.find_children("*", "MeshInstance3D", true, false):
 		var inst := mi as MeshInstance3D
+		inst.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF   # marine casts no shadow
 		var base := inst.get_active_material(0)
 		var dup: StandardMaterial3D = (base as StandardMaterial3D).duplicate() if base is StandardMaterial3D else StandardMaterial3D.new()
 		dup.emission_enabled = true
@@ -336,6 +339,10 @@ func _handle_movement(delta: float) -> void:
 	current_velocity = move * SPEED                 # world-space, decoupled from facing
 	position += current_velocity * delta
 	_clamp_to_island()
+	# Push out of columns/lava and climb onto small rocks (island is at the origin, so
+	# this local position is also the world position).
+	if obstacles != null:
+		position = obstacles.resolve(position, BODY_RADIUS)
 
 
 ## Yaw to face the point "between" the two hands' targets (their bisector). Falls

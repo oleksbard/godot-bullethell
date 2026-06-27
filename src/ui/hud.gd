@@ -21,6 +21,9 @@ extends CanvasLayer
 signal level_reached(level: int)
 
 const MarineModel: PackedScene = preload("res://models/marine_01.glb")
+const StatusIconScript := preload("res://src/ui/status_icon.gd")
+const RELOAD_ICON: Texture2D = preload("res://art/ui/reload.svg")   # game-icons.net reload-gun-barrel
+const SOUL_ICON: Texture2D = preload("res://art/ui/soul.svg")       # game-icons.net spectre — the souls glyph
 
 # Palette (matches pause_menu.gd).
 const EMBER := Color(1.0, 0.45, 0.2)
@@ -39,6 +42,7 @@ const PORTRAIT := 116
 const HP_SIZE := Vector2(360, 40)
 const LVLUP_MAX := 10       # cap the level-up medal stack so it can't overflow
 const LVLUP_STACK_OFFSET := 10   # px each stacked medal is shifted right of the one below
+const STATUS_SIZE := 72    # buff/debuff badge size — much bigger than a 34px level-up medal
 
 # Portrait framing — a face/mug shot aimed at the rig's Head bone. Distances are
 # fractions of head height so it stays framed whatever the model's scale.
@@ -51,6 +55,7 @@ const BOB := 0.02           # idle vertical bob (metres)
 const XP_FILL_PER_SEC := 1.6   # XP-bar fill speed, in bars/sec (a full bar slides in ~0.6 s)
 
 var stats: Node             # PlayerStats; set before add_child
+var weapon_ring: Node       # WeaponRing; set by Main — polled for the reload debuff
 
 var _hp: ProgressBar
 var _hp_label: Label
@@ -59,7 +64,8 @@ var _lv: Label              # the number inside the medallion
 var _lv_badge: Panel        # circular level medallion (overlaps the portrait corner)
 var _wave_label: Label      # "WAVE N", top-centre
 var _lvlup_stack: Control   # per-wave level-up medals, stacked under the HP bar
-var _souls_orb: Panel       # cyan soul-mote glyph in the top-right counter
+var _reload_icon: StatusIconScript   # reload debuff badge, in the same row as the medals
+var _souls_orb: TextureRect # cyan soul glyph in the top-right counter
 var _souls_count: Label     # banked-souls number beside it
 var _portrait: Node3D
 var _t := 0.0
@@ -87,6 +93,7 @@ func _ready() -> void:
 
 func _process(delta: float) -> void:
 	_animate_xp(delta)
+	_update_reload_debuff()
 	if _portrait == null:
 		return
 	_t += delta
@@ -126,6 +133,7 @@ func _build() -> void:
 	_build_level_badge(root)
 	_build_wave_label(root)
 	_build_lvlup_stack(root)
+	_build_status_row(root)
 	_build_souls(root)
 
 
@@ -289,16 +297,14 @@ func _build_souls(root: Control) -> void:
 	strip.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	root.add_child(strip)
 
-	var sz := 26
-	_souls_orb = Panel.new()
+	var sz := 30
+	_souls_orb = TextureRect.new()
+	_souls_orb.texture = SOUL_ICON
+	_souls_orb.modulate = SOUL                          # cyan soul tint
+	_souls_orb.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_souls_orb.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	_souls_orb.custom_minimum_size = Vector2(sz, sz)
 	_souls_orb.pivot_offset = Vector2(sz, sz) * 0.5     # punch scales from the centre
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = SOUL
-	sb.border_color = SOUL_RIM
-	sb.set_border_width_all(2)
-	sb.set_corner_radius_all(sz / 2)                    # full radius -> circle (a glowing mote)
-	_souls_orb.add_theme_stylebox_override("panel", sb)
 	_souls_orb.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	strip.add_child(_souls_orb)
 
@@ -322,6 +328,32 @@ func _build_lvlup_stack(root: Control) -> void:
 		XP_HEIGHT + MARGIN + int(HP_SIZE.y) + 8)             # just under the HP bar
 	_lvlup_stack.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	root.add_child(_lvlup_stack)
+
+
+## Buff/debuff badges, in the same row as the level-up medals (just under the HP bar).
+## For now only the reload debuff; it's hidden until a gun reloads.
+func _build_status_row(root: Control) -> void:
+	_reload_icon = StatusIconScript.new()
+	_reload_icon.icon = RELOAD_ICON
+	_reload_icon.custom_minimum_size = Vector2(STATUS_SIZE, STATUS_SIZE)
+	_reload_icon.size = Vector2(STATUS_SIZE, STATUS_SIZE)
+	_reload_icon.position = Vector2(MARGIN + PORTRAIT + MARGIN, XP_HEIGHT + MARGIN + int(HP_SIZE.y) + 8)
+	_reload_icon.visible = false
+	root.add_child(_reload_icon)
+
+
+## Poll the weapon ring each frame: show the reload debuff while any gun reloads,
+## stacked by how many, with the cooldown sweep draining as they finish.
+func _update_reload_debuff() -> void:
+	if _reload_icon == null or weapon_ring == null or not weapon_ring.has_method("reload_state"):
+		return
+	var st: Dictionary = weapon_ring.reload_state()
+	var count: int = st["count"]
+	if count <= 0:
+		_reload_icon.visible = false
+		return
+	_reload_icon.visible = true
+	_reload_icon.set_state(count, st["frac"], st["seconds"])
 
 
 ## Pop an up-arrow medal onto the stack under the HP bar (newest on top, shifted right).

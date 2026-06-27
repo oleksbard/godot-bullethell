@@ -26,7 +26,14 @@ const RARITY_LEGENDARY := "Legendary"
 const DMG_PER_LEVEL := 0.4              # +40% base damage per level
 const FIRE_SPEEDUP_PER_LEVEL := 0.05   # -5% fire interval per level
 const FIRE_INTERVAL_MIN := 0.6         # floor so high levels don't fire absurdly fast
+const MAGAZINE := 7                    # bolts per magazine before a reload
+const RELOAD_BASE := 2.0               # base reload seconds (level-1 pistol)
+const RELOAD_SPEEDUP_PER_LEVEL := 0.07 # -7% reload time per level (higher level reloads faster)
+const RELOAD_MIN := 0.8                # floor so high levels don't reload instantly
 const POWER_BASE := 10.0               # a level-1 pistol's power
+const BASE_PRICE := 10.0               # souls to buy a level-1 item; price = round(BASE_PRICE * level^PRICE_EXP)
+const PRICE_EXP := 1.5
+const SELL_FRACTION := 0.65            # an owned item sells back for this fraction of its buy price
 const MAX_ITEM_LEVEL := 8
 const RARITY_FALLOFF_BASE := 0.45      # weight ratio between adjacent levels (rarity_bonus 0)
 const RARITY_FALLOFF_MAX := 0.95
@@ -113,12 +120,32 @@ func fire_interval_value() -> float:
 		GunScript.FIRE_INTERVAL * (1.0 - FIRE_SPEEDUP_PER_LEVEL * float(item_level - 1)))
 
 
+## Magazine size — bolts fired before the gun must reload.
+func magazine_size() -> int:
+	return MAGAZINE
+
+
+## Level-scaled reload time (seconds): higher-level guns reload faster, floored.
+func reload_time_value() -> float:
+	return maxf(RELOAD_MIN, RELOAD_BASE * (1.0 - RELOAD_SPEEDUP_PER_LEVEL * float(item_level - 1)))
+
+
 ## Combat-value score, normalized so a level-1 pistol = POWER_BASE (10). Scales with
 ## DPS (damage × shots/sec). The level-up menu sums this over equipped items.
 func power() -> int:
 	var base_dps := GunScript.DAMAGE * 60.0 / GunScript.FIRE_INTERVAL
 	var dps := damage_value() * 60.0 / fire_interval_value()
 	return roundi(POWER_BASE * dps / base_dps)
+
+
+## Soul cost to buy this item from the shop (scales with level).
+func buy_price() -> int:
+	return roundi(BASE_PRICE * pow(float(item_level), PRICE_EXP))
+
+
+## Souls returned for selling an owned item — SELL_FRACTION of its buy price.
+func sell_price() -> int:
+	return roundi(float(buy_price()) * SELL_FRACTION)
 
 
 ## The Type tag value: Gun | Artifact | Other.
@@ -156,10 +183,10 @@ func stats() -> Array:
 			return [
 				["Damage", roundi(damage_value())],                  # real: the bolt's damage (level-scaled)
 				["Rate of Fire", roundi(60.0 / fire_interval_value())],  # real: shots/min (level-scaled)
-				["Power", power()],                                  # normalized combat value (level-1 pistol = 10)
+				["Reload", reload_time_value()],                     # real: seconds to reload (level-scaled)
 				["Range", 12],                                       # ponytail: display-only; ~WeaponRing.MAX_RANGE
 				["Knockback", 2],                                    # ponytail: display-only; melee/bolt knockback not wired yet
-				["Magazine", 7],                                     # not implemented; spec value
+				["Magazine", magazine_size()],                       # real: bolts per magazine
 				["Piercing", 0],                                     # not implemented (0 -> hidden)
 				["Ricochet", 0],                                     # not implemented (0 -> hidden)
 			]

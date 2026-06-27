@@ -15,6 +15,7 @@ signal wave_cleared()            # drip done & 0 imps left (Main vacuums leftove
 const ImpScript := preload("res://src/enemies/imp.gd")
 const PortalScript := preload("res://src/fx/portal.gd")
 const IslandShape := preload("res://src/lib/island_shape.gd")
+const ObstacleFieldScript := preload("res://src/world/obstacle_field.gd")
 
 const WAVE_1_COUNT := 15
 const HP_PER_WAVE := 3.0         # imp HP added per wave (pistol dmg 5: w1=1 shot, w2-3=2 shots, w4-5=3...)
@@ -42,6 +43,7 @@ const STAT_POWER_WEIGHT := 0.5   # how much power inflates per-imp HP + damage
 
 var player: Node3D
 var inventory: Node              # Inventory (set by Main); read for loadout power. null -> factor 1.0
+var obstacles: ObstacleFieldScript   # island columns/lava/rocks (set by Main); handed to each imp
 var _power_factor := 1.0         # loadout-power factor for the current wave (read at _start_wave)
 var _rng := RandomNumberGenerator.new()
 var _wave := 0                   # wave number (1,2,3…), drives the spawn interval
@@ -124,6 +126,7 @@ func _spawn_one() -> void:
 	var pt := _scatter_point()
 	var imp := ImpScript.new()
 	imp.player = player
+	imp.obstacles = obstacles
 	var stat_mult := lerpf(1.0, _power_factor, STAT_POWER_WEIGHT)   # power makes imps tougher
 	imp.max_hp = (ImpScript.BASE_HP + float(_wave - 1) * HP_PER_WAVE) * stat_mult
 	imp.hp = imp.max_hp

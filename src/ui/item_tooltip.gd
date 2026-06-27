@@ -19,6 +19,12 @@ const BORDER_COL := Color(0.5, 0.25, 0.15, 0.9)
 const TAG_BG := Color(0.22, 0.1, 0.06, 0.95)
 const TAG_BORDER := Color(0.6, 0.3, 0.16, 1.0)
 const TAG_TEXT := Color(0.95, 0.62, 0.4)
+const POWER_TEX: Texture2D = preload("res://art/ui/power.svg")   # game-icons.net power-lightning
+const SOUL_TEX: Texture2D = preload("res://art/ui/soul.svg")     # game-icons.net spectre (soul = the currency)
+const POWER_COLOR := Color(1.0, 0.55, 0.2)   # ember tint for the Power chip
+const PRICE_COLOR := Color(0.2, 0.85, 1.0)   # cyan tint for the Price chip (matches the souls UI)
+const HL_GAP := 0.35     # icon -> value gap, × body font
+const HL_CHIP_GAP := 0.9 # gap between the Power chip and the Price chip, × body font
 
 const CURSOR_OFFSET := 16.0
 const FLAVOR_WRAP_CHARS := 34
@@ -48,6 +54,15 @@ var _sub_text := ""
 var _sub_color := EMBER_DIM
 var _tags: Array = []               # header pill strings (Type + traits)
 var _tag_rects: Array[Rect2] = []   # pill rects (relative to this control)
+# Highlight chips: Power (always) + Price (BUY for shop offers / SELL for owned items).
+var _price_val := -1                # souls; -1 = no price chip
+var _price_is_buy := false          # true -> "BUY", false -> "SELL"
+var _power_text := ""
+var _price_text := ""               # "" when _price_val < 0
+var _hl_y := 0.0                    # highlight row top
+var _hl_pw_text_x := 0.0            # power value text x
+var _hl_mote_cx := -1.0             # price mote centre x (-1 = no price chip)
+var _hl_price_text_x := 0.0         # price value text x
 var _rows: Array = []               # [[label, value_str], ...]
 var _flavor_lines: PackedStringArray = PackedStringArray()
 var _s_name := 0
@@ -72,10 +87,14 @@ func _ready() -> void:
 # --- public -----------------------------------------------------------------
 
 ## Show the tooltip for `item` near `screen_pos`, with the body font at `font_px`.
-## Rebuilds the (cheap) layout model only when the item or font changes.
-func show_for(item: Object, screen_pos: Vector2, font_px: int) -> void:
-	if item != _item or font_px != _s_stat:
+## `price` (>= 0) shows a Price chip — a BUY price for a shop offer (`price_is_buy`)
+## or the SELL price for an owned item. Rebuilds the (cheap) model only when something
+## it depends on changes.
+func show_for(item: Object, screen_pos: Vector2, font_px: int, price: int = -1, price_is_buy: bool = false) -> void:
+	if item != _item or font_px != _s_stat or price != _price_val or price_is_buy != _price_is_buy:
 		_item = item
+		_price_val = price
+		_price_is_buy = price_is_buy
 		_build_model(item, font_px)
 		queue_redraw()
 	visible = true
@@ -123,6 +142,8 @@ func _build_model(item: Object, px: int) -> void:
 	_sub_text = "%s · Lvl %d" % [rarity, item.level()]
 	_sub_color = RARITY_COLORS.get(rarity, EMBER_DIM)
 	_tags = item.tags()
+	_power_text = str(item.power())
+	_price_text = "" if _price_val < 0 else "%d %s" % [_price_val, "BUY" if _price_is_buy else "SELL"]
 	_rows = format_stats(item)
 	var flavor: String = item.flavor()
 	_flavor_lines = _wrap(flavor, FLAVOR_WRAP_CHARS).split("\n") if flavor != "" else PackedStringArray()
@@ -161,6 +182,22 @@ func _build_model(item: Object, px: int) -> void:
 		tags_right = tx - _s_tag * TAG_GAP
 		y += tag_h
 
+	# Highlight row: a Power chip (bolt + value), and a Price chip (mote + value) when set.
+	var hl_icon := float(_s_stat)
+	var hl_gap := _s_stat * HL_GAP
+	y += sect * 0.6
+	_hl_y = y
+	_hl_pw_text_x = pad + hl_icon + hl_gap
+	var hl_right := _hl_pw_text_x + _font.get_string_size(_power_text, HORIZONTAL_ALIGNMENT_LEFT, -1, _s_stat).x
+	if _price_text != "":
+		hl_right += _s_stat * HL_CHIP_GAP
+		_hl_mote_cx = hl_right + hl_icon * 0.5
+		_hl_price_text_x = hl_right + hl_icon + hl_gap
+		hl_right = _hl_price_text_x + _font.get_string_size(_price_text, HORIZONTAL_ALIGNMENT_LEFT, -1, _s_stat).x
+	else:
+		_hl_mote_cx = -1.0
+	y += maxf(hl_icon, _font.get_height(_s_stat))
+
 	y += sect
 	_sep1_y = y
 	y += sect
@@ -184,6 +221,7 @@ func _build_model(item: Object, px: int) -> void:
 	var content_w := _font.get_string_size(_name_text, HORIZONTAL_ALIGNMENT_LEFT, -1, _s_name).x
 	content_w = maxf(content_w, _font.get_string_size(_sub_text, HORIZONTAL_ALIGNMENT_LEFT, -1, _s_sub).x)
 	content_w = maxf(content_w, tags_right - pad)
+	content_w = maxf(content_w, hl_right - pad)
 	content_w = maxf(content_w, _value_x - pad + value_w)
 	for ln in _flavor_lines:
 		content_w = maxf(content_w, _font.get_string_size(ln, HORIZONTAL_ALIGNMENT_LEFT, -1, _s_flavor).x)
@@ -201,6 +239,15 @@ func _draw() -> void:
 	_draw_line_text(Vector2(pad, _sub_y), _sub_text, _s_sub, _sub_color)
 	for i in _tags.size():
 		_draw_tag(_tag_rects[i], str(_tags[i]))
+	# Highlight chips: power-lightning + Power, soul glyph + Price (BUY/SELL).
+	var hl_icon := float(_s_stat)
+	var hl_h := _font.get_height(_s_stat)
+	var icon_top := _hl_y + (hl_h - hl_icon) * 0.5
+	draw_texture_rect(POWER_TEX, Rect2(pad, icon_top, hl_icon, hl_icon), false, POWER_COLOR)
+	_draw_line_text(Vector2(_hl_pw_text_x, _hl_y), _power_text, _s_stat, VALUE_COL)
+	if _hl_mote_cx >= 0.0:
+		draw_texture_rect(SOUL_TEX, Rect2(_hl_mote_cx - hl_icon * 0.5, icon_top, hl_icon, hl_icon), false, PRICE_COLOR)
+		_draw_line_text(Vector2(_hl_price_text_x, _hl_y), _price_text, _s_stat, PRICE_COLOR)
 	draw_line(Vector2(pad, _sep1_y), Vector2(size.x - pad, _sep1_y), SEP_COL, 1.0)
 	for i in _rows.size():
 		_draw_line_text(Vector2(pad, _row_ys[i]), _rows[i][0], _s_stat, EMBER_DIM)
