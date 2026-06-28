@@ -8,6 +8,7 @@ signal health_changed(health: float, max_health: float)
 signal xp_changed(total_xp: float)        # monotonic lifetime XP; the HUD animates the bar from it
 signal leveled_up(level: int)             # authoritative level event (the HUD fires the flourish/modal when its bar fills)
 signal souls_changed(souls: int)          # banked soul count changed (HUD + level-up menu show it)
+signal damaged(amount: float)             # damage the player took this hit (CombatTracker tallies it)
 
 var max_health := 60.0
 var health := 60.0
@@ -16,6 +17,7 @@ var xp := 0.0
 var xp_to_next := 16.0                     # = xp_for(1); first level-up cost (Brotato curve)
 var total_xp := 0.0                       # never decreases; lets the HUD animate across level boundaries
 var souls := 0                            # currency banked from collected soul-motes; spent in the level-up shop
+var total_souls := 0                      # never decreases; lifetime souls collected (drives the shop reroll base)
 var rarity_bonus := 0.0                   # "Increased Rarity" / Luck: flattens the shop's level-roll curve upward (0 for now; future upgrade)
 
 
@@ -23,6 +25,7 @@ var rarity_bonus := 0.0                   # "Increased Rarity" / Luck: flattens 
 func take_damage(amount: float) -> void:
 	health = clampf(health - amount, 0.0, max_health)
 	health_changed.emit(health, max_health)
+	damaged.emit(amount)
 
 
 # Called (via marine.gain_health) when a health vial is picked up. Restores up to `amount`
@@ -53,6 +56,7 @@ func add_xp(amount: float) -> void:
 ## Bank souls from collected soul-motes (one per mote). Spent in the level-up shop.
 func add_souls(amount: int = 1) -> void:
 	souls += amount
+	total_souls += amount
 	souls_changed.emit(souls)
 
 

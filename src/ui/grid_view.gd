@@ -18,9 +18,12 @@ const SLOT_BORDER := Color(0.62, 0.22, 0.1)
 const LOCKED_BG := Color(0.02, 0.0, 0.0, 0.6)      # dim "not yet unlocked" fill
 const LOCKED_BORDER := Color(0.25, 0.12, 0.08)     # dim border + hatch line
 const SUBSTRATE_ALPHA := 0.28                       # placed expansions draw faint (a marker, not an item)
+const STAR_COLOR := Color(1.0, 0.85, 0.2)          # marks a gun cell buffed by the hovered artifact
+const STAR_OUTLINE := Color(0.15, 0.08, 0.0, 0.95)
 
 var grid: Object                  # InventoryGrid; set via setup()
 var cell_size := CELL             # px per cell; raised by the menu to scale the grid up crisply
+var star_cells: Array = []        # cells to mark with a ★ (guns buffed by the hovered artifact)
 
 static var _icon_cache: Dictionary = {}   # Kind -> Texture2D (or null when no art on disk); shared
 
@@ -37,6 +40,27 @@ func setup(g: Object) -> void:
 func refresh() -> void:
 	custom_minimum_size = _span()
 	queue_redraw()
+
+
+## Mark `cells` with a ★ (the menu sets this to the guns a hovered artifact buffs); [] clears.
+func set_stars(cells: Array) -> void:
+	star_cells = cells
+	queue_redraw()
+
+
+## A filled 5-point star centred in `rect`, with a thin dark outline for contrast.
+func _draw_star(rect: Rect2) -> void:
+	var c := rect.get_center()
+	var ro := rect.size.x * 0.36
+	var ri := ro * 0.42
+	var pts := PackedVector2Array()
+	for i in 10:
+		var ang := -PI * 0.5 + float(i) * PI / 5.0
+		var r := ro if i % 2 == 0 else ri
+		pts.append(c + Vector2(cos(ang), sin(ang)) * r)
+	draw_colored_polygon(pts, STAR_COLOR)
+	pts.append(pts[0])
+	draw_polyline(pts, STAR_OUTLINE, maxf(1.0, rect.size.x * 0.03))
 
 
 ## Local pixel position -> grid cell (may be outside the mask; caller checks fits()).
@@ -77,6 +101,9 @@ func _draw() -> void:
 	# Content items (guns) on top, fully opaque.
 	for item in grid.items_in_reading_order():
 		_draw_item(item, grid.origin_of[item], inset)
+	# Stars over guns buffed by the artifact currently hovered (set via set_stars()).
+	for cell in star_cells:
+		_draw_star(Rect2(cell_origin(cell), Vector2(cell_size, cell_size)))
 
 
 ## Draw one item (rarity backing, then icon or placeholder colour) at `origin`,

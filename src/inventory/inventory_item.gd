@@ -6,7 +6,11 @@ extends RefCounted
 ## stats, descriptions) lives in the WeaponCatalog, keyed by `kind` — this script
 ## just applies the shared level-scaling on top and exposes a generic tooltip API.
 
-enum Kind { PISTOL, SAWED_OFF, EXPAND_1X1, EXPAND_2X2 }
+enum Kind {
+	PISTOL, SAWED_OFF, EXPAND_1X1, EXPAND_2X2,
+	RUNE_OF_WRATH, HELLFIRE_COIL, QUICKSILVER_SIGIL, HOARDERS_MARK,
+	GREATER_WRATH, CHAIN_SIGIL, RESONATOR, CONDUIT, THE_FURNACE, THE_SUN,
+}
 
 const Self := preload("res://src/inventory/inventory_item.gd")   # cold-load safe self-ref
 const WeaponCatalogScript := preload("res://src/weapons/weapon_catalog.gd")   # per-weapon data
@@ -50,6 +54,11 @@ func _def() -> WeaponDefScript:
 ## True for expansion (inventory-grid extender) items — they branch the stat API.
 func _is_expansion() -> bool:
 	return item_type == WeaponDefScript.ItemType.EXPANSION
+
+
+## True for artifact items — they have no level/power and branch price + stats.
+func is_artifact() -> bool:
+	return item_type == WeaponDefScript.ItemType.ARTIFACT
 
 
 ## rot-0 bounding box (width, height) in cells.
@@ -124,6 +133,8 @@ func display_name() -> String:
 func rarity() -> String:
 	if _is_expansion():
 		return "Inventory Expansion"
+	if is_artifact():
+		return "Tier %d Artifact" % _def().tier
 	if item_level >= 6:
 		return RARITY_LEGENDARY
 	if item_level >= 4:
@@ -135,7 +146,7 @@ func rarity() -> String:
 
 ## Item level (the rolled value). Drives rarity, stats, and power.
 func level() -> int:
-	if _is_expansion():
+	if _is_expansion() or is_artifact():
 		return 0
 	return item_level
 
@@ -163,7 +174,7 @@ func reload_time_value() -> float:
 ## Combat-value score, normalized so a level-1 weapon = POWER_BASE (10). Scales with
 ## DPS (damage × shots/sec). The level-up menu sums this over equipped items.
 func power() -> int:
-	if _is_expansion():
+	if _is_expansion() or is_artifact():
 		return 0
 	var def := _def()
 	var base_dps := def.damage * 60.0 / def.fire_interval
@@ -173,7 +184,7 @@ func power() -> int:
 
 ## Soul cost to buy this item from the shop (scales with level).
 func buy_price() -> int:
-	if _is_expansion():
+	if _is_expansion() or is_artifact():
 		return _def().base_price
 	var base: float = float(_def().base_price) if _def().base_price > 0 else BASE_PRICE
 	return roundi(base * pow(float(item_level), PRICE_EXP))
@@ -181,7 +192,7 @@ func buy_price() -> int:
 
 ## Souls returned for selling an owned item — SELL_FRACTION of its buy price.
 func sell_price() -> int:
-	if _is_expansion():
+	if _is_expansion() or is_artifact():
 		return roundi(float(_def().base_price) * SELL_FRACTION)
 	return roundi(float(buy_price()) * SELL_FRACTION)
 
@@ -199,7 +210,7 @@ func type_name() -> String:
 ## Generic — the tooltip renders whatever it gets. Expansions show no pills (the
 ## "Inventory Expansion" subtitle already names them).
 func tags() -> Array:
-	if _is_expansion():
+	if _is_expansion() or is_artifact():
 		return []
 	var out: Array = _def().traits.duplicate()
 	out.append(type_name())
@@ -215,6 +226,8 @@ func flavor() -> String:
 ## The ItemTooltip hides false/zero entries, so pattern-specific rows (Pellets/Spread)
 ## and unimplemented stats (Knockback/Piercing/Ricochet) only show when they apply.
 func stats() -> Array:
+	if is_artifact():
+		return [["Effect", _artifact_effect_text()]]
 	if _is_expansion():
 		var bb := _bbox()
 		return [["Size", "%dx%d" % [bb.x, bb.y]], ["Slots", base_cells.size()]]
@@ -235,6 +248,31 @@ func stats() -> Array:
 		["Ricochet", 0],
 	])
 	return rows
+
+
+## A readable summary of an artifact's effect (Phase 1: stat / amp / conduit shapes).
+func _artifact_effect_text() -> String:
+	var e: Dictionary = _def().effect
+	if e.get("conduit", false):
+		return "Relays adjacent artifacts through itself"
+	if e.has("amp"):
+		return "Adjacent artifacts ×%s stronger" % _fmt_mul(e["mul"])
+	var who: String = "All guns" if e.get("scope", 0) == WeaponDefScript.Scope.GLOBAL else "Adjacent guns"
+	var stat_name: String = {"damage": "damage", "fire_rate": "fire rate", "reload": "reload"}.get(e.get("stat", ""), "stat")
+	if e.has("mul"):
+		return "%s ×%s %s" % [who, _fmt_mul(e["mul"]), stat_name]
+	if e.has("mul_per"):
+		return "%s +%d%% %s per adjacent %s (max +%d%%)" % [
+			who, roundi(e["mul_per"] * 100.0), stat_name,
+			"gun" if e.get("per", "") == "adjacent_gun" else "artifact",
+			roundi(e.get("cap", 0.0) * 100.0)]
+	return "—"
+
+
+## Format a multiplier without trailing zeros: 1.4 -> "1.4", 1.0 -> "1". (GDScript's
+## % has no %g, so format with one decimal and strip.)
+func _fmt_mul(v: Variant) -> String:
+	return ("%.1f" % float(v)).rstrip("0").rstrip(".")
 
 
 ## Occupied cells at the current rotation, normalized so min col/row = 0.

@@ -37,6 +37,7 @@ var fire_interval := FIRE_INTERVAL
 var mag_size := MAG_SIZE
 var reload_time := RELOAD_TIME
 var def: WeaponDefScript = null     # set by the WeaponRing; null -> procedural pistol, SINGLE
+var source_item: Object = null     # the InventoryItem this gun was built from (recap icon/rarity); null for fallback/floating guns
 
 static var _shared_flash_tex: Texture2D   # soft round flash sprite, shared by all guns
 

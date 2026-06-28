@@ -69,6 +69,30 @@ func can_pick_up(_item: InventoryItemScript) -> bool:
 	return true
 
 
+## Distinct items whose footprint shares a 4-neighbour (orthogonal) edge with `item`'s
+## footprint. Excludes `item` itself and diagonal-only neighbours; [] if `item` isn't placed.
+func adjacent_items(item: InventoryItemScript) -> Array:
+	if not origin_of.has(item):
+		return []
+	var origin: Vector2i = origin_of[item]
+	var own: Dictionary = {}
+	for c in item.cells():
+		own[origin + c] = true
+	var dirs := [Vector2i(0, -1), Vector2i(0, 1), Vector2i(-1, 0), Vector2i(1, 0)]
+	var seen: Dictionary = {}
+	var out: Array = []
+	for cell in own:
+		for d in dirs:
+			var n: Vector2i = cell + d
+			if own.has(n):
+				continue
+			var other: Variant = occupancy.get(n)
+			if other != null and other != item and not seen.has(other):
+				seen[other] = true
+				out.append(other)
+	return out
+
+
 ## Distinct placed items in row-major reading order (top->bottom, left->right).
 func items_in_reading_order() -> Array:
 	var ordered: Array = valid.keys()

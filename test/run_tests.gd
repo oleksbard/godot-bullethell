@@ -23,6 +23,8 @@ const LootSuite := preload("res://test/suites/loot_suite.gd")
 const UiSuite := preload("res://test/suites/ui_suite.gd")
 const AudioSuite := preload("res://test/suites/audio_suite.gd")
 const ExpansionSuite := preload("res://test/suites/expansion_suite.gd")
+const ArtifactsSuite := preload("res://test/suites/artifacts_suite.gd")
+const StatsSuite := preload("res://test/suites/stats_suite.gd")
 
 
 func _initialize() -> void:
@@ -31,6 +33,8 @@ func _initialize() -> void:
 	WorldSuite.new().run(t)        # world + inventory suites are pure/synchronous
 	InventorySuite.new().run(t)
 	ExpansionSuite.new().run(t)     # pure/synchronous, like the inventory suite
+	ArtifactsSuite.new().run(t)     # pure/synchronous: catalog defs + the resolver
+	StatsSuite.new().run(t)         # pure: WaveStats math + tracker accumulation
 	await MarineSuite.new().run(t) # the rest add nodes + await frames for _ready()
 	await EnemiesSuite.new().run(t)
 	await WeaponsSuite.new().run(t)

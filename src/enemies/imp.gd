@@ -15,6 +15,7 @@ const MODEL: PackedScene = preload("res://models/imp_opt.glb")
 const ANIM_SHADER: Shader = preload("res://src/enemies/imp_anim.gdshader")
 
 const GROUP := "imps"
+const ENEMY_NAME := "Imp"        # display label for the recap's kills-by-type tally
 const SPEED := 2.3           # drift toward the player (set 0 for static)
 const EDGE_MARGIN := 0.6     # keep the imp this far inside the coast (can't chase onto the void)
 const BODY_RADIUS := 0.4     # collision radius vs. columns + lava
@@ -120,9 +121,10 @@ func _spawn_corpse() -> void:
 
 ## Take `amount` damage; dies (with gore) when HP reaches 0, else survives the hit.
 ## blood_spatters/hit_dir are forwarded to the death spray only on the killing blow.
-func take_damage(amount: float, blood_spatters: int = 3, hit_dir: Vector3 = Vector3.ZERO) -> void:
+## Returns true if the hit was lethal (the imp died), false if it survived.
+func take_damage(amount: float, blood_spatters: int = 3, hit_dir: Vector3 = Vector3.ZERO) -> bool:
 	if _dead:
-		return
+		return false
 	if is_instance_valid(_dmg_number):
 		_dmg_number.add(amount)                      # already showing -> accumulate into the one number
 	else:
@@ -130,9 +132,15 @@ func take_damage(amount: float, blood_spatters: int = 3, hit_dir: Vector3 = Vect
 	hp -= amount
 	if hp <= 0.0:
 		die(blood_spatters, hit_dir)
-	else:
-		Gore.spawn_hit(get_parent(), global_position, BODY_COLOR, hit_dir)   # survived: 1 decal + flesh
-		_react_to_hit(hit_dir)
+		return true
+	Gore.spawn_hit(get_parent(), global_position, BODY_COLOR, hit_dir)   # survived: 1 decal + flesh
+	_react_to_hit(hit_dir)
+	return false
+
+
+## The enemy-type label for the recap's kills-by-type tally.
+func enemy_type() -> String:
+	return ENEMY_NAME
 
 
 ## Survived a hit: flash white, get shoved back along the bolt, and slow briefly.

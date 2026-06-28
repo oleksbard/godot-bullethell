@@ -23,6 +23,7 @@ const ScreenGradeScript := preload("res://src/fx/screen_grade.gd")
 const InventoryScript := preload("res://src/inventory/inventory.gd")
 const WaveMenuScript := preload("res://src/ui/wave_menu.gd")
 const ObstacleFieldScript := preload("res://src/world/obstacle_field.gd")
+const CombatTrackerScript := preload("res://src/stats/combat_tracker.gd")
 
 const CAM_OFFSET := Vector3(0.0, 13.0, 7.0)
 const CAM_SIZE := 18.0             # orthographic vertical extent (smaller = closer)
@@ -55,6 +56,11 @@ func _ready() -> void:
 	marine.add_child(stats)
 	marine.stats = stats
 
+	# Combat tracker — per-wave stats (damage, kills, per-gun DPS) for the recap screen.
+	var tracker := CombatTrackerScript.new()
+	add_child(tracker)
+	stats.damaged.connect(tracker.record_damage_taken)
+
 	# Grid inventory: the backpack's equipped pistols drive the marine's held guns.
 	var inventory := InventoryScript.build()
 	marine.add_child(inventory)
@@ -84,6 +90,7 @@ func _ready() -> void:
 	wave_menu.inventory = inventory
 	wave_menu.hud = hud
 	wave_menu.stats = stats
+	wave_menu.tracker = tracker
 	add_child(wave_menu)
 
 	# Wave spawner — announces imp spawns + wave boundaries; we wire them to loot + HUD here.
@@ -96,11 +103,16 @@ func _ready() -> void:
 	loot.drained.connect(wave_menu.open)                  # ...then open the menu once they've all flown in
 	wave_menu.closed.connect(spawner.resume_after_menu)   # CONTINUE -> breather -> next wave
 	spawner.wave_started.connect(hud.on_wave_started)
+	spawner.wave_started.connect(func(w: int) -> void: wave_menu.current_wave = w)   # gates artifact tiers
+	spawner.wave_started.connect(tracker.begin_wave)
+	spawner.imp_spawned.connect(tracker.on_imp_spawned)
+	spawner.wave_cleared.connect(tracker.end_wave)
 	add_child(spawner)
 
 	# Guns floating around the marine, auto-aiming at the closest imps.
 	var weapons := WeaponRingScript.new()
 	weapons.player = marine
+	weapons.tracker = tracker
 	hud.weapon_ring = weapons        # HUD polls it for the reload debuff
 	add_child(weapons)
 

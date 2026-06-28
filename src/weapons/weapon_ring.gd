@@ -14,6 +14,8 @@ const ShotSfxScript := preload("res://src/audio/shot_sfx.gd")
 const ImpactSfxScript := preload("res://src/audio/impact_sfx.gd")
 const TurretMountScript := preload("res://src/weapons/turret_mount.gd")
 const WeaponCatalogScript := preload("res://src/weapons/weapon_catalog.gd")
+const ArtifactResolverScript := preload("res://src/artifacts/artifact_resolver.gd")
+const GunModsScript := preload("res://src/weapons/gun_mods.gd")
 
 const RADIUS := 0.8          # how far the floating guns sit from the player
 const HEIGHT := 1.0          # float height (~hand height)
@@ -33,6 +35,7 @@ const MAX_RANGE := 12.0
 
 var player: Node3D
 var _inventory: Node         # Inventory (or null -> fall back to gun_count)
+var tracker: Node = null     # CombatTracker (set by Main); records per-gun shots/hits for the recap
 var _guns: Array[Node3D] = []
 var _mounts: Array = []      # per-gun hand mount (Node3D) or null if it floats
 var _turrets: Array = []     # per-gun TurretMount (floating guns) or null (held guns)
@@ -76,21 +79,28 @@ func _rebuild() -> void:
 
 	var pistols: Array = []
 	var n := clampi(gun_count, 0, 12)
+	var mods_by_item: Dictionary = {}
 	if _inventory != null:
 		pistols = _inventory.equipped_guns()
 		n = clampi(pistols.size(), 0, 12)
+		mods_by_item = ArtifactResolverScript.resolve(_inventory.backpack)   # artifact buffs per gun
 
 	for i in n:
 		var g: Node3D = GunScript.new()
 		g.fired.connect(_on_gun_fired.bind(g))
-		# Each gun fires with its equipped weapon's catalog def + level-scaled stats.
+		# Each gun fires with its equipped weapon's catalog def + level-scaled stats,
+		# then artifact GunMods (damage ×, fire faster, reload faster) on top.
 		if i < pistols.size():
 			var item: Object = pistols[i]
+			var m: Object = mods_by_item.get(item, null)
+			if m == null:
+				m = GunModsScript.new()
 			g.def = WeaponCatalogScript.get_def(item.kind)
-			g.damage = item.damage_value()
-			g.fire_interval = item.fire_interval_value()
+			g.damage = item.damage_value() * m.damage_mul
+			g.fire_interval = item.fire_interval_value() / maxf(0.01, m.fire_rate_mul)
 			g.mag_size = item.magazine_size()
-			g.reload_time = item.reload_time_value()
+			g.reload_time = item.reload_time_value() * m.reload_mul
+			g.source_item = item
 		# Stagger first shots so the guns fire individually, not in lockstep.
 		g.stagger(GunScript.FIRE_INTERVAL * float(i) / float(maxi(n, 1)))
 		add_child(g)
@@ -197,6 +207,8 @@ func _sfx_for(def: Object) -> Node:
 func _on_gun_fired(origin: Vector3, target: Node3D, damage: float, aim_dir: Vector3, gun: Node3D) -> void:
 	if not is_instance_valid(target):
 		return
+	if tracker != null:
+		tracker.record_shot(gun, gun.source_item)
 	_sfx_for(gun.def).play()             # each weapon plays its own shot sound
 	var p: Node3D = ProjectileScript.new()
 	p.target = target
@@ -208,5 +220,13 @@ func _on_gun_fired(origin: Vector3, target: Node3D, damage: float, aim_dir: Vect
 		p.blood_max = gun.def.blood_max
 		p.max_range = gun.def.range
 	p.hit_enemy.connect(_impact.play)    # softer thud when this bolt connects
+	if tracker != null:
+		p.dealt.connect(_record_hit.bind(gun))   # ponytail: spread fires one bolt per pellet -> shots count pellets (per-pellet accuracy)
 	get_parent().add_child(p)
 	p.global_position = origin
+
+
+## Credit the firing `gun` for a bolt that connected (damage dealt + a kill if lethal).
+func _record_hit(amount: float, killed: bool, gun: Node3D) -> void:
+	if tracker != null:
+		tracker.record_hit(gun, amount, killed)

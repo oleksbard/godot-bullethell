@@ -15,6 +15,10 @@ const MarineScript := preload("res://src/marine/marine.gd")
 const WeaponRingScript := preload("res://src/weapons/weapon_ring.gd")
 const WeaponCatalogScript := preload("res://src/weapons/weapon_catalog.gd")
 const WeaponDefScript := preload("res://src/weapons/weapon_def.gd")
+const GunModsScript := preload("res://src/weapons/gun_mods.gd")
+const RecapViewScript := preload("res://src/ui/recap_view.gd")
+const WaveStatsScript := preload("res://src/stats/wave_stats.gd")
+const CombatTrackerScript := preload("res://src/stats/combat_tracker.gd")
 
 
 func run(t: TestContext) -> void:
@@ -31,8 +35,16 @@ func run(t: TestContext) -> void:
 	await _test_sell_item(t)
 	await _test_tooltip_expansion(t)
 	await _test_shop_expansion_offers(t)
+	await _test_shop_artifacts(t)
+	await _test_shop_composition(t)
+	await _test_tooltip_artifact_buff(t)
+	await _test_grid_view_stars(t)
 	await _test_expansion_pickup_move(t)
 	await _test_grid_view_substrate(t)
+	await _test_shop_lock(t)
+	await _test_shop_reroll(t)
+	await _test_recap_view(t)
+	await _test_wave_menu_recap(t)
 
 
 func _test_grid_view_colors(t: TestContext) -> void:
@@ -117,6 +129,8 @@ func _test_grid_view_expandable(t: TestContext) -> void:
 		"the 1x1 expansion icon loads once its art exists")
 	t.ok(GridViewScript.icon_for(InventoryItemScript.for_kind(InventoryItemScript.Kind.EXPAND_2X2)) != null,
 		"the 2x2 expansion icon loads once its art exists")
+	t.ok(GridViewScript.icon_for(InventoryItemScript.for_kind(InventoryItemScript.Kind.RUNE_OF_WRATH)) != null,
+		"the artifact placeholder icon (artifact_00) loads — guards against an unimported PNG")
 	inv.free()
 
 
@@ -276,7 +290,7 @@ func _test_shop_offers(t: TestContext) -> void:
 	t.root().add_child(menu)
 	await t.frame()
 	menu.open(2)
-	t.ok(menu._offers.size() == 4, "open() rolls 4 shop offers (got %d)" % menu._offers.size())
+	t.ok(menu._offers.size() == 5, "open() rolls 5 shop offers (got %d)" % menu._offers.size())
 
 	var before_souls: int = st.souls
 	var price: int = int(menu._offers[0]["price"])
@@ -349,11 +363,95 @@ func _test_shop_expansion_offers(t: TestContext) -> void:
 	# Buying an expansion lands it in the stash and counts toward escalation.
 	menu.open(1)
 	var before: int = inv.expansion_count()
-	menu._offers[0] = {"item": e, "price": menu._offer_price(e), "sold": false}
+	menu._offers[0] = {"item": e, "price": menu._offer_price(e), "sold": false, "locked": false}
 	menu._refresh_offer(0)
 	menu._buy(0)
 	t.ok(inv.expansion_count() == before + 1, "buying an expansion increases the owned count")
 
+	t.tree.paused = false
+	menu.free()
+	inv.free()
+	st.free()
+
+
+## The shop rolls artifacts once their tier has unlocked, and gates higher tiers behind
+## later waves. Rolls many offers (deterministic seed) rather than relying on 4 lucky slots.
+func _test_shop_artifacts(t: TestContext) -> void:
+	t.suite = "WaveMenu.shop_artifacts"
+	var inv: Node = InventoryScript.build()
+	var st: Node = PlayerStatsScript.new()
+	st.souls = 1000
+	st.level = 20
+	var menu: CanvasLayer = WaveMenuScript.new()
+	menu.inventory = inv
+	menu.stats = st
+	menu._rng.seed = 7
+	t.root().add_child(menu)
+	await t.frame()
+
+	menu.current_wave = 20                         # all tiers unlocked
+	var saw_artifact := false
+	for i in 200:
+		if menu._roll_offer_item().is_artifact():
+			saw_artifact = true
+			break
+	t.ok(saw_artifact, "the shop can offer artifacts once unlocked")
+
+	menu.current_wave = 1                          # only Tier-1 eligible
+	var any_high_tier := false
+	for i in 400:
+		var it: Object = menu._roll_offer_item()
+		if it.is_artifact() and WeaponCatalogScript.get_def(it.kind).tier >= 4:
+			any_high_tier = true
+			break
+	t.ok(not any_high_tier, "wave 1 never offers Tier 4+ artifacts")
+
+	t.tree.paused = false
+	menu.free()
+	st.free()
+	inv.free()
+
+
+func _test_shop_composition(t: TestContext) -> void:
+	t.suite = "WaveMenu.composition"
+	var inv: Node = InventoryScript.build()
+	var st: Node = PlayerStatsScript.new()
+	st.level = 10
+	var menu: CanvasLayer = WaveMenuScript.new()
+	menu.inventory = inv
+	menu.stats = st
+	menu._rng.seed = 3
+	t.root().add_child(menu)
+	await t.frame()
+	menu.open(20)                                  # high wave -> several artifact tiers eligible
+	t.ok(menu._offers.size() == 5, "shop has 5 slots")
+
+	var guns := 0
+	var exps := 0
+	var arts: Dictionary = {}
+	for o in menu._offers:
+		var it: Object = o["item"]
+		if it.is_artifact():
+			t.ok(not arts.has(it.kind), "no duplicate artifact kind in the shop")
+			arts[it.kind] = true
+		elif it.item_type == WeaponDefScript.ItemType.EXPANSION:
+			exps += 1
+		else:
+			guns += 1
+	t.ok(guns >= 1, "at least one gun is guaranteed (got %d)" % guns)
+	t.ok(exps >= 1, "an expander is guaranteed while the backpack has room (got %d)" % exps)
+	menu.close()
+
+	# Fully unlock the backpack: place a 1x1 extender on every locked cell.
+	for cell in inv.backpack.locked_cells().duplicate():
+		inv.backpack.place(InventoryItemScript.for_kind(InventoryItemScript.Kind.EXPAND_1X1), cell)
+	t.ok(inv.backpack.locked_cells().is_empty(), "backpack is now fully unlocked")
+	menu.open(20)
+	var exps2 := 0
+	for o in menu._offers:
+		if o["item"].item_type == WeaponDefScript.ItemType.EXPANSION:
+			exps2 += 1
+	t.ok(exps2 == 0, "no expanders roll once the backpack is full (got %d)" % exps2)
 	t.tree.paused = false
 	menu.free()
 	inv.free()
@@ -423,6 +521,52 @@ func _test_expansion_pickup_move(t: TestContext) -> void:
 	st.free()
 
 
+## A gun buffed by an artifact shows the resolved stat (5×1.4 = 7), flagged buffed, and
+## carries the affecting artifact's icon in the tooltip's icon row.
+func _test_tooltip_artifact_buff(t: TestContext) -> void:
+	t.suite = "ItemTooltip.artifact_buff"
+	var tip: Control = ItemTooltipScript.new()
+	t.root().add_child(tip)
+	await t.frame()                       # _ready sets the font
+	var gun := InventoryItemScript.pistol()        # base damage 5
+	var mods: Object = GunModsScript.new()
+	mods.damage_mul = 1.4
+	var icon: Texture2D = GridViewScript.icon_for(InventoryItemScript.for_kind(InventoryItemScript.Kind.RUNE_OF_WRATH))
+	tip.show_for(gun, Vector2(10, 10), 21, 5, false, mods, [icon])
+	var dmg := ""
+	var buffed := false
+	for i in tip._rows.size():
+		if tip._rows[i][0] == "Damage":
+			dmg = str(tip._rows[i][1])
+			buffed = tip._row_buffed[i]
+	t.ok(dmg == "7" and buffed, "buffed gun tooltip shows resolved damage 5x1.4=7, flagged buffed (got '%s')" % dmg)
+	t.ok(tip._source_icons.size() == 1, "tooltip carries the affecting artifact's icon")
+	# An unbuffed gun (no mods) shows the plain value, not flagged.
+	tip.show_for(InventoryItemScript.pistol(), Vector2(10, 10), 21, -1, false, null, [])
+	var plain_buffed := false
+	for b in tip._row_buffed:
+		if b:
+			plain_buffed = true
+	t.ok(not plain_buffed and tip._source_icons.is_empty(), "an unbuffed gun shows plain stats, no icons")
+	tip.free()
+
+
+## set_stars stores the marked cells and drawing a ★ over a grid cell must not crash.
+func _test_grid_view_stars(t: TestContext) -> void:
+	t.suite = "GridView.stars"
+	var inv: Node = InventoryScript.build()
+	var gv: Control = GridViewScript.new()
+	gv.setup(inv.backpack)
+	gv.set_stars([Vector2i(3, 2)])
+	t.ok(gv.star_cells == [Vector2i(3, 2)], "set_stars stores the marked cells")
+	t.root().add_child(gv)
+	await t.frame()                       # exercise _draw_star; a draw error surfaces in the run log
+	gv.set_stars([])
+	t.ok(gv.star_cells.is_empty(), "set_stars([]) clears the marks")
+	gv.free()
+	inv.free()
+
+
 ## A placed extender renders faint (substrate alpha) under the slots, and drawing it
 ## must not crash.
 func _test_grid_view_substrate(t: TestContext) -> void:
@@ -438,3 +582,132 @@ func _test_grid_view_substrate(t: TestContext) -> void:
 	await t.frame()                       # draws the faint substrate + base; must not crash
 	gv.free()
 	inv.free()
+
+
+func _test_shop_lock(t: TestContext) -> void:
+	t.suite = "WaveMenu.lock"
+	var inv: Node = InventoryScript.build()
+	var st: Node = PlayerStatsScript.new()
+	st.souls = 1000
+	st.level = 10
+	var menu: CanvasLayer = WaveMenuScript.new()
+	menu.inventory = inv
+	menu.stats = st
+	menu._rng.seed = 5
+	t.root().add_child(menu)
+	await t.frame()
+	menu.open(2)
+	var kept: Object = menu._offers[0]["item"]
+	menu._on_lock_toggled(true, 0)
+	t.ok(menu._offers[0]["locked"], "toggling locks the slot")
+
+	menu.close()
+	menu.open(3)                                   # next wave's shop
+	t.ok(menu._offers[0]["item"] == kept and menu._offers[0]["locked"],
+		"a locked offer persists across opens")
+
+	menu._buy(0)
+	t.ok(menu._offers[0]["sold"] and not menu._offers[0]["locked"],
+		"buying a locked slot clears its lock")
+	menu.close()
+	menu.open(4)
+	t.ok(menu._offers[0]["item"] != kept, "after buying, the slot re-rolls next wave")
+	t.tree.paused = false
+	menu.free()
+	inv.free()
+	st.free()
+
+
+func _test_shop_reroll(t: TestContext) -> void:
+	t.suite = "WaveMenu.reroll"
+	var inv: Node = InventoryScript.build()
+	var st: Node = PlayerStatsScript.new()
+	st.add_souls(1000)                             # total_souls = 1000 -> base = max(1, round(20.0)) = 20
+	var menu: CanvasLayer = WaveMenuScript.new()
+	menu.inventory = inv
+	menu.stats = st
+	menu._rng.seed = 9
+	t.root().add_child(menu)
+	await t.frame()
+	menu.open(2)
+	t.ok(menu.reroll_cost() == 20, "first reroll = max(1, 2%% of total collected) (got %d)" % menu.reroll_cost())
+
+	var kept: Object = menu._offers[0]["item"]
+	menu._on_lock_toggled(true, 0)                 # lock slot 0
+	var before: int = st.souls
+	menu._reroll()
+	t.ok(st.souls == before - 20, "reroll spends the cost (%d -> %d)" % [before, st.souls])
+	t.ok(menu._offers[0]["item"] == kept, "reroll keeps locked slots")
+	t.ok(menu.reroll_cost() == 60, "second reroll triples to base*3 (got %d)" % menu.reroll_cost())
+
+	menu.close()
+	menu.open(3)
+	t.ok(menu.reroll_cost() == 20, "reroll cost resets to base next wave (got %d)" % menu.reroll_cost())
+
+	for i in menu._offers.size():
+		menu._on_lock_toggled(true, i)
+	t.ok(menu._reroll_btn.disabled, "reroll is disabled when every slot is locked")
+	t.tree.paused = false
+	menu.free()
+	inv.free()
+	st.free()
+
+
+## RecapView draws a populated and an empty WaveStats without crashing (a draw error
+## surfaces in the run log) and stores what it was given.
+func _test_recap_view(t: TestContext) -> void:
+	t.suite = "RecapView"
+	var inv: Node = InventoryScript.build()
+	var rv: Control = RecapViewScript.new()
+	rv.set_scale_k(1.0)
+	t.root().add_child(rv)
+	await t.frame()                                  # _ready grabs the font
+	var ws: Object = WaveStatsScript.new()
+	ws.wave = 5
+	ws.duration = 12.0
+	ws.damage_dealt = 800.0
+	ws.damage_taken = 40.0
+	ws.souls_earned = 120
+	ws.kills_by_type = {"Imp": 18}
+	ws.guns = [{"item": InventoryItemScript.pistol(), "name": "Pistol", "damage": 500.0, "shots": 30, "hits": 26, "kills": 12}]
+	rv.show_stats(ws, inv.backpack)
+	await t.frame()                                  # exercise _draw with content
+	t.ok(rv._stats == ws, "show_stats stores the wave stats")
+	rv.show_stats(WaveStatsScript.new(), null)       # empty/edge: no guns, no kills, 0 duration, null backpack
+	await t.frame()
+	t.ok(rv._stats != null, "an empty recap renders without crashing")
+	rv.free()
+	inv.free()
+
+
+## open() defaults to the RECAP tab (recap shown, shop hidden); switching shows the shop.
+func _test_wave_menu_recap(t: TestContext) -> void:
+	t.suite = "WaveMenu.recap"
+	var inv: Node = InventoryScript.build()
+	var st: Node = PlayerStatsScript.new()
+	var tr: Object = CombatTrackerScript.new()
+	tr.begin_wave(2)
+	tr.record_damage_taken(5.0)
+	tr.end_wave()
+	var menu: CanvasLayer = WaveMenuScript.new()
+	menu.inventory = inv
+	menu.stats = st
+	menu.tracker = tr
+	t.root().add_child(menu)
+	await t.frame()
+	menu.open(2)
+	t.ok(menu._tab == "shop" and menu._columns.visible and not menu._recap_view.visible,
+		"open() defaults to the SHOP tab")
+	menu._set_tab("recap")
+	t.ok(menu._recap_view.visible and not menu._columns.visible, "switching to RECAP shows the recap")
+	t.ok(menu._recap_view._stats == tr.last_wave, "the recap view is fed the last wave's stats")
+	# Grid hit-testing is suppressed on the RECAP tab so tab clicks aren't swallowed.
+	t.ok(menu._view_and_cell(Vector2(9999, 9999)).is_empty(), "no grid interaction while recap is shown")
+	menu._set_tab("shop")
+	t.ok(menu._columns.visible and not menu._recap_view.visible, "switching back to SHOP shows the shop")
+	menu.close()
+	t.tree.paused = false
+	menu.free()
+	tr.free()       # tracker is a Node referenced via menu.tracker, not a child — free it
+	inv.free()
+	st.free()

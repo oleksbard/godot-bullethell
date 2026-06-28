@@ -8,6 +8,7 @@ extends RefCounted
 enum ItemType { GUN, ARTIFACT, OTHER, EXPANSION }       ## the "Type" tag shown in the tooltip
 enum Pattern { SINGLE, SPREAD, BEAM }        ## firing behaviour; BEAM reserved (see Gun._fire)
 enum Body { PISTOL, SAWED_OFF }              ## which procedural body Gun builds when model_scene is null
+enum Scope { ADJACENT, GLOBAL, ARTIFACTS }   ## artifact effect reach (who it affects)
 
 const Self := preload("res://src/weapons/weapon_def.gd")   # cold-load safe self-ref (no global class cache)
 
@@ -26,7 +27,15 @@ var fire_interval: float = 1.7
 var magazine: int = 7
 var reload: float = 2.0
 var range: float = 12.0                        # display-only targeting range (≈ WeaponRing.MAX_RANGE)
-var base_price: int = 0                       # expansions: flat catalog price (shop applies escalation)
+var base_price: int = 0                       # expansions/artifacts: flat catalog price (shop applies escalation for expansions)
+
+# Artifact data (item_type == ARTIFACT). Empty/0 for guns + expansions.
+var tier: int = 0                              # 1..5: drives artifact price, roll weight, first wave
+var effect: Dictionary = {}                    # interpreted by ArtifactResolver. Shapes:
+#   STAT   {"scope", "stat": "damage"|"fire_rate"|"reload", "mul": float}
+#   STACK  {"scope", "stat", "mul_per": float, "per": "adjacent_artifact"|"adjacent_gun", "cap": float}
+#   AMP    {"amp": "neighbors", "mul": float}   (Resonator)
+#   ROUTER {"conduit": true}                    (Conduit)
 
 # Firing
 var pattern: int = Pattern.SINGLE
@@ -54,3 +63,13 @@ static func from(d: Dictionary) -> Self:
 	for key in d:
 		w.set(key, d[key])
 	return w
+
+
+## Artifact whose effect amplifies neighbouring artifacts (Resonator).
+func is_amplifier() -> bool:
+	return effect.has("amp")
+
+
+## Artifact that relays adjacent artifacts' effects through itself (Conduit).
+func is_conduit() -> bool:
+	return effect.get("conduit", false)

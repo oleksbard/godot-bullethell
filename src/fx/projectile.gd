@@ -10,6 +10,7 @@ const MeshFactory := preload("res://src/lib/mesh_factory.gd")
 const ImpScript := preload("res://src/enemies/imp.gd")
 
 signal hit_enemy            # emitted when this bolt hits an imp (drives the impact SFX)
+signal dealt(amount: float, killed: bool)   # bolt connected — WeaponRing credits the firing gun
 
 const SPEED := 38.25        # 15% slower than the original 45
 const HIT_DIST := 0.95      # horizontal hit radius — generous so fast bolts don't thread between imps
@@ -69,7 +70,8 @@ func _process(delta: float) -> void:
 	var hit := _first_hit(prev, global_position)
 	if hit != null:
 		hit_enemy.emit()
-		hit.take_damage(damage, randi_range(blood_min, blood_max), _dir)   # dir: blood + gibs spray forward on the kill
+		var killed: bool = hit.take_damage(damage, randi_range(blood_min, blood_max), _dir)
+		dealt.emit(damage, killed)        # credit the firing gun (damage + kill)
 		queue_free()
 
 

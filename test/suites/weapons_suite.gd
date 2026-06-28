@@ -14,6 +14,7 @@ const WeaponDefScript := preload("res://src/weapons/weapon_def.gd")
 const WeaponCatalogScript := preload("res://src/weapons/weapon_catalog.gd")
 const InventoryItemScript := preload("res://src/inventory/inventory_item.gd")
 const ShotSfxScript := preload("res://src/audio/shot_sfx.gd")
+const CombatTrackerScript := preload("res://src/stats/combat_tracker.gd")
 
 
 func run(t: TestContext) -> void:
@@ -36,6 +37,8 @@ func run(t: TestContext) -> void:
 	_test_spread_aim(t)
 	await _test_sawed_off_burst(t)
 	await _test_sawed_off_model(t)
+	await _test_artifact_buffs_gun(t)
+	await _test_weapon_ring_tracks_fire(t)
 
 
 func _test_weapon_ring(t: TestContext) -> void:
@@ -408,6 +411,30 @@ func _mesh_parts(g: Node) -> int:
 	return n
 
 
+## A Rune of Wrath dropped next to the equipped pistols makes them fire harder. The
+## backpack base sits at offset (2,1); cell (3,2) is a valid empty slot bordering the
+## left pistol's (2,2), so the resolver buffs at least one gun.
+func _test_artifact_buffs_gun(t: TestContext) -> void:
+	t.suite = "WeaponRing.artifacts"
+	var holder := Node3D.new(); t.root().add_child(holder)
+	var m: Node3D = MarineScript.new()
+	holder.add_child(m)
+	var inv: Node = InventoryScript.build()                 # 2 pistols equipped
+	m.add_child(inv)
+	m.inventory = inv
+	inv.backpack.place(InventoryItemScript.for_kind(InventoryItemScript.Kind.RUNE_OF_WRATH), Vector2i(3, 2))
+	var wr: Node3D = WeaponRingScript.new()
+	wr.player = m
+	holder.add_child(wr)                                    # _ready -> _rebuild reads the inventory + resolves artifacts
+	await t.frame()
+	var buffed := false
+	for g in wr._guns:
+		if g.damage > GunScript.DAMAGE:
+			buffed = true
+	t.ok(buffed, "a gun adjacent to Rune of Wrath fires harder than base")
+	holder.free()
+
+
 func _test_spread_aim(t: TestContext) -> void:
 	t.suite = "Gun.spread_aim"
 	var base := Vector3(0, 0, -1)
@@ -443,3 +470,38 @@ func _test_weapon_catalog(t: TestContext) -> void:
 	var sg: Object = WeaponCatalogScript.get_def(WeaponCatalogScript.SAWED_OFF)
 	t.ok(sg.pattern == WeaponDefScript.Pattern.SPREAD and sg.pellets >= 2, "sawed-off fires SPREAD with multiple pellets")
 	t.ok(WeaponCatalogScript.weapon_kinds().size() >= 2, "catalog lists at least pistol + sawed-off")
+
+
+## The WeaponRing reports a fired shot and its projectile's hit to the injected tracker,
+## crediting the firing gun (this exercises gun.source_item + _on_gun_fired + projectile.dealt).
+func _test_weapon_ring_tracks_fire(t: TestContext) -> void:
+	t.suite = "WeaponRing.tracking"
+	var holder := Node3D.new()
+	t.root().add_child(holder)
+	var m: Node3D = MarineScript.new()
+	holder.add_child(m)
+	var inv: Node = InventoryScript.build()
+	m.add_child(inv)
+	m.inventory = inv
+	var wr: Node3D = WeaponRingScript.new()
+	wr.player = m
+	var tr: Object = CombatTrackerScript.new()
+	tr.begin_wave(1)
+	wr.tracker = tr
+	holder.add_child(wr)
+	await t.frame()                                  # ring builds 2 guns from the 2 pistols
+	var gun: Node3D = wr._guns[0]
+	var target := Node3D.new()                       # a stand-in imp to fire at
+	holder.add_child(target)
+	wr._on_gun_fired(Vector3.ZERO, target, 5.0, Vector3.ZERO, gun)
+	t.ok(tr._by_gun.has(gun) and tr._by_gun[gun]["shots"] == 1, "a fired shot is recorded against the gun")
+	var proj: Node = null
+	for c in holder.get_children():
+		if c.has_signal("dealt"):
+			proj = c
+	t.ok(proj != null, "the gun spawned a projectile")
+	proj.dealt.emit(5.0, true)
+	t.ok(is_equal_approx(tr._by_gun[gun]["damage"], 5.0) and tr._by_gun[gun]["kills"] == 1,
+		"the projectile's hit credits the gun with damage + a kill")
+	holder.free()   # frees the full tree incl. m + inv + wr + target + projectile
+	tr.free()       # tracker isn't parented under holder — free it separately

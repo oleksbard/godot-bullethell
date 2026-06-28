@@ -13,6 +13,7 @@ const InventoryGridScript := preload("res://src/inventory/inventory_grid.gd")
 const WeaponDefScript := preload("res://src/weapons/weapon_def.gd")
 const ExpandableGridScript := preload("res://src/inventory/expandable_grid.gd")
 const WeaponCatalogScript := preload("res://src/weapons/weapon_catalog.gd")
+const ArtifactResolverScript := preload("res://src/artifacts/artifact_resolver.gd")
 
 # Backpack mask: _OO_ / OOOO / OOOO / OOOO (14 cells).
 const BACKPACK_CELLS: Array[Vector2i] = [
@@ -63,12 +64,17 @@ func equipped_pistols() -> Array:
 	return equipped_guns()
 
 
-## Total combat power of the equipped (backpack) pistols — drives the next wave.
+## Total combat power of the equipped guns, including artifact buffs — drives the next wave.
 func loadout_power() -> int:
-	var p := 0
+	var mods_by_item: Dictionary = ArtifactResolverScript.resolve(backpack)
+	var p := 0.0
 	for it in equipped_guns():
-		p += it.power()
-	return p
+		var m: Object = mods_by_item.get(it, null)
+		var factor := 1.0
+		if m != null:
+			factor = m.damage_mul * m.fire_rate_mul        # power ~ DPS = damage × rate
+		p += float(it.power()) * factor
+	return roundi(p)
 
 
 ## How many expansion items the player owns (placed in the backpack + stored in the

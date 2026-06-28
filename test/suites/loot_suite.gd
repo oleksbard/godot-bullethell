@@ -26,6 +26,7 @@ func run(t: TestContext) -> void:
 	_test_item_level_and_power(t)
 	_test_rarity_roll(t)
 	_test_loadout_power(t)
+	_test_loadout_power_artifacts(t)
 	_test_player_heal(t)
 	await _test_health_vial(t)
 	await _test_health_vial_field(t)
@@ -208,6 +209,9 @@ func _test_spend_souls(t: TestContext) -> void:
 	t.ok(st.spend_souls(10) and st.souls == 20, "spend deducts when affordable (souls %d)" % st.souls)
 	t.ok(emitted[0] == 20, "spend emits souls_changed")
 	t.ok(not st.spend_souls(999) and st.souls == 20, "spend refuses when unaffordable (no change)")
+	t.ok(st.total_souls == 30, "total_souls is the monotonic lifetime sum (30), not the spent-down balance (got %d)" % st.total_souls)
+	st.add_souls(5)
+	t.ok(st.souls == 25 and st.total_souls == 35, "add_souls raises both souls and total_souls")
 	st.free()
 
 
@@ -301,6 +305,17 @@ func _test_loadout_power(t: TestContext) -> void:
 	hi.item_level = 6
 	inv.add_to_stash(hi)
 	t.ok(inv.loadout_power() == p_before, "a stashed pistol doesn't count toward loadout power")
+	inv.free()
+
+
+## A global damage artifact in the backpack raises the loadout power readout. (3,1) is a
+## valid empty backpack cell — Furnace is GLOBAL, so position only needs to be placed.
+func _test_loadout_power_artifacts(t: TestContext) -> void:
+	t.suite = "Inventory.loadout_power"
+	var inv: Node = InventoryScript.build()
+	var base: int = inv.loadout_power()
+	inv.backpack.place(InventoryItemScript.for_kind(InventoryItemScript.Kind.THE_FURNACE), Vector2i(3, 1))
+	t.ok(inv.loadout_power() > base, "a global damage artifact raises loadout power (%d > %d)" % [inv.loadout_power(), base])
 	inv.free()
 
 

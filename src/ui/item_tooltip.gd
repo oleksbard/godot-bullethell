@@ -12,6 +12,7 @@ extends Control
 const EMBER := Color(1.0, 0.45, 0.2)
 const EMBER_DIM := Color(0.72, 0.42, 0.28)
 const VALUE_COL := Color(0.95, 0.92, 0.85)
+const BUFF_COL := Color(0.45, 1.0, 0.55)     # stat value raised by an artifact (green = buffed)
 const FLAVOR_COL := Color(0.7, 0.64, 0.56)
 const PANEL_BG := Color(0.08, 0.035, 0.03, 0.97)
 const SEP_COL := Color(0.5, 0.25, 0.15, 0.8)
@@ -65,6 +66,11 @@ var _hl_pw_text_x := 0.0            # power value text x
 var _hl_mote_cx := -1.0             # price mote centre x (-1 = no price chip)
 var _hl_price_text_x := 0.0         # price value text x
 var _rows: Array = []               # [[label, value_str], ...]
+var _row_buffed: Array = []         # parallel to _rows: true where an artifact raised the value
+var _source_icons: Array = []       # artifact icons that buff this gun (drawn in a row)
+var _icons_y := -1.0                # icon row top (-1 = none)
+var _icon_px := 0                   # icon square size
+var _last_sig := ""                 # mods+icons signature, so a buff change rebuilds the model
 var _flavor_lines: PackedStringArray = PackedStringArray()
 var _s_name := 0
 var _s_sub := 0
@@ -91,15 +97,28 @@ func _ready() -> void:
 ## `price` (>= 0) shows a Price chip — a BUY price for a shop offer (`price_is_buy`)
 ## or the SELL price for an owned item. Rebuilds the (cheap) model only when something
 ## it depends on changes.
-func show_for(item: Object, screen_pos: Vector2, font_px: int, price: int = -1, price_is_buy: bool = false) -> void:
-	if item != _item or font_px != _s_stat or price != _price_val or price_is_buy != _price_is_buy:
+## `mods` (GunMods or null) re-renders the gun's affected stats as their resolved value in
+## BUFF_COL; `source_icons` are the artifact icons shown in a row beneath the stats.
+func show_for(item: Object, screen_pos: Vector2, font_px: int, price: int = -1, price_is_buy: bool = false,
+		mods: Object = null, source_icons: Array = []) -> void:
+	var sig := _mods_sig(mods, source_icons)
+	if item != _item or font_px != _s_stat or price != _price_val or price_is_buy != _price_is_buy or sig != _last_sig:
 		_item = item
 		_price_val = price
 		_price_is_buy = price_is_buy
-		_build_model(item, font_px)
+		_source_icons = source_icons
+		_last_sig = sig
+		_build_model(item, font_px, mods)
 		queue_redraw()
 	visible = true
 	_place(screen_pos)
+
+
+## A cheap signature of the buff inputs, so the model rebuilds when they change.
+func _mods_sig(mods: Object, icons: Array) -> String:
+	if mods == null:
+		return ""
+	return "%.3f_%.3f_%.3f_%d" % [mods.damage_mul, mods.fire_rate_mul, mods.reload_mul, icons.size()]
 
 
 ## Hide the tooltip and forget the item (so the next show_for rebuilds).
@@ -131,7 +150,7 @@ static func format_stats(item: Object) -> Array:
 
 ## Measure the content at `px` and stack it, setting our exact size. No autolayout,
 ## so the box always fits — content height is computed with the same steps _draw uses.
-func _build_model(item: Object, px: int) -> void:
+func _build_model(item: Object, px: int, mods: Object = null) -> void:
 	_s_stat = px
 	_s_name = roundi(px * 1.3)
 	_s_sub = maxi(9, roundi(px * 0.92))
@@ -148,6 +167,11 @@ func _build_model(item: Object, px: int) -> void:
 	_show_power = item.power() > 0
 	_price_text = "" if _price_val < 0 else "%d %s" % [_price_val, "BUY" if _price_is_buy else "SELL"]
 	_rows = format_stats(item)
+	_row_buffed = []
+	_row_buffed.resize(_rows.size())
+	_row_buffed.fill(false)
+	if mods != null:
+		_apply_mods(item, mods)
 	var flavor: String = item.flavor()
 	_flavor_lines = _wrap(flavor, FLAVOR_WRAP_CHARS).split("\n") if flavor != "" else PackedStringArray()
 
@@ -216,6 +240,16 @@ func _build_model(item: Object, px: int) -> void:
 	for r in _rows:
 		_row_ys.append(y)
 		y += _font.get_height(_s_stat) + px * ROW_GAP
+
+	# Artifact source icons: a row beneath the stats listing what buffs this gun.
+	_icon_px = roundi(px * 1.25)
+	if _source_icons.size() > 0:
+		y += sect
+		_icons_y = y
+		y += float(_icon_px)
+	else:
+		_icons_y = -1.0
+
 	if _flavor_lines.size() > 0:
 		y += sect
 		_sep2_y = y
@@ -234,6 +268,7 @@ func _build_model(item: Object, px: int) -> void:
 	content_w = maxf(content_w, tags_right - pad)
 	content_w = maxf(content_w, hl_right - pad)
 	content_w = maxf(content_w, _value_x - pad + value_w)
+	content_w = maxf(content_w, float(_source_icons.size()) * (float(_icon_px) + px * 0.2))
 	for ln in _flavor_lines:
 		content_w = maxf(content_w, _font.get_string_size(ln, HORIZONTAL_ALIGNMENT_LEFT, -1, _s_flavor).x)
 
@@ -263,11 +298,38 @@ func _draw() -> void:
 	draw_line(Vector2(pad, _sep1_y), Vector2(size.x - pad, _sep1_y), SEP_COL, 1.0)
 	for i in _rows.size():
 		_draw_line_text(Vector2(pad, _row_ys[i]), _rows[i][0], _s_stat, EMBER_DIM)
-		_draw_line_text(Vector2(_value_x, _row_ys[i]), _rows[i][1], _s_stat, VALUE_COL)
+		var vcol: Color = BUFF_COL if (i < _row_buffed.size() and _row_buffed[i]) else VALUE_COL
+		_draw_line_text(Vector2(_value_x, _row_ys[i]), _rows[i][1], _s_stat, vcol)
+	if _icons_y >= 0.0:
+		var ix := _s_stat * PAD
+		var igap := _s_stat * 0.2
+		for tex in _source_icons:
+			if tex != null:
+				draw_texture_rect(tex, Rect2(ix, _icons_y, _icon_px, _icon_px), false)
+			ix += float(_icon_px) + igap
 	if _sep2_y >= 0.0:
 		draw_line(Vector2(pad, _sep2_y), Vector2(size.x - pad, _sep2_y), SEP_COL, 1.0)
 	for i in _flavor_lines.size():
 		_draw_line_text(Vector2(pad, _flavor_ys[i]), _flavor_lines[i], _s_flavor, FLAVOR_COL)
+
+
+## Re-render a buffed gun's affected stat rows as their artifact-resolved value (in
+## BUFF_COL). Maps the known stat labels to GunMods fields; leaves others untouched.
+func _apply_mods(item: Object, mods: Object) -> void:
+	for i in _rows.size():
+		match _rows[i][0]:
+			"Damage":
+				if not is_equal_approx(mods.damage_mul, 1.0):
+					_rows[i][1] = _fmt_num(roundi(item.damage_value() * mods.damage_mul))
+					_row_buffed[i] = true
+			"Rate of Fire":
+				if not is_equal_approx(mods.fire_rate_mul, 1.0):
+					_rows[i][1] = _fmt_num(roundi(60.0 * mods.fire_rate_mul / item.fire_interval_value()))
+					_row_buffed[i] = true
+			"Reload":
+				if not is_equal_approx(mods.reload_mul, 1.0):
+					_rows[i][1] = _fmt_num(item.reload_time_value() * mods.reload_mul)
+					_row_buffed[i] = true
 
 
 ## Draw a tag "pill": a filled, ember-bordered box with the tag text centred in it.

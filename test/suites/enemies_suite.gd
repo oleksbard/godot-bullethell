@@ -17,6 +17,7 @@ func run(t: TestContext) -> void:
 	await _test_wave_spawner(t)
 	await _test_imp_die(t)
 	await _test_imp_take_damage(t)
+	await _test_imp_take_damage_returns_killed(t)
 	await _test_imp_xp_drop(t)
 	await _test_imp_hit_react(t)
 	await _test_imp_emerge(t)
@@ -378,3 +379,18 @@ func _test_wave_power_scaling(t: TestContext) -> void:
 	h1.free()
 	h2.free()
 	inv.free()
+
+
+func _test_imp_take_damage_returns_killed(t: TestContext) -> void:
+	t.suite = "Imp.take_damage"
+	var holder := Node3D.new()
+	t.root().add_child(holder)
+	var imp: Node3D = ImpScript.new()
+	imp.max_hp = 10.0
+	imp.hp = 10.0
+	holder.add_child(imp)
+	await t.frame()                                  # _ready builds the model
+	t.ok(imp.enemy_type() == "Imp", "imp reports its enemy type")
+	t.ok(imp.take_damage(4.0) == false, "a non-lethal hit returns false")
+	t.ok(imp.take_damage(99.0) == true, "the lethal hit returns true")
+	holder.free()
