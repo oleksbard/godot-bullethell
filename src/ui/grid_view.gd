@@ -15,6 +15,9 @@ const RARITY_BG_ALPHA := 0.30     # translucency of the rarity backing behind no
 
 const SLOT_BG := Color(0.05, 0.02, 0.02, 0.9)
 const SLOT_BORDER := Color(0.62, 0.22, 0.1)
+const LOCKED_BG := Color(0.02, 0.0, 0.0, 0.6)      # dim "not yet unlocked" fill
+const LOCKED_BORDER := Color(0.25, 0.12, 0.08)     # dim border + hatch line
+const SUBSTRATE_ALPHA := 0.28                       # placed expansions draw faint (a marker, not an item)
 
 var grid: Object                  # InventoryGrid; set via setup()
 var cell_size := CELL             # px per cell; raised by the menu to scale the grid up crisply
@@ -51,31 +54,57 @@ func _draw() -> void:
 	if grid == null:
 		return
 	var inset := ITEM_INSET * float(cell_size) / float(CELL)   # scale the inset with the cell
-	for cell in grid.valid:
-		var r := Rect2(cell_origin(cell), Vector2(cell_size, cell_size))
-		draw_rect(r, SLOT_BG)
-		draw_rect(r, SLOT_BORDER, false, 2.0)
+	# Cell backing: the full field when expandable (locked cells marked), else just valid.
+	if grid.has_method("field_cells"):
+		for cell in grid.field_cells():
+			var r := Rect2(cell_origin(cell), Vector2(cell_size, cell_size))
+			if grid.valid.has(cell):
+				draw_rect(r, SLOT_BG)
+				draw_rect(r, SLOT_BORDER, false, 2.0)
+			else:
+				draw_rect(r, LOCKED_BG)
+				draw_rect(r, LOCKED_BORDER, false, 1.0)
+				draw_line(r.position, r.position + r.size, LOCKED_BORDER, 1.0)   # corner hatch = "locked"
+	else:
+		for cell in grid.valid:
+			var r := Rect2(cell_origin(cell), Vector2(cell_size, cell_size))
+			draw_rect(r, SLOT_BG)
+			draw_rect(r, SLOT_BORDER, false, 2.0)
+	# Substrate (extenders) drawn faint, under the content items.
+	if grid.has_method("substrate_items"):
+		for ext in grid.substrate_items():
+			_draw_item(ext, grid.ext_origin[ext], inset, SUBSTRATE_ALPHA)
+	# Content items (guns) on top, fully opaque.
 	for item in grid.items_in_reading_order():
-		var origin: Vector2i = grid.origin_of[item]
-		var bg := rarity_bg(item)                  # rarity-tinted backing for non-Normal items
-		if bg.a > 0.0:
-			for c in item.cells():
-				draw_rect(Rect2(cell_origin(origin + c), Vector2(cell_size, cell_size)), bg)
-		var tex := icon_for(item)
-		if tex != null:
-			draw_icon(self, tex, item, cell_origin(origin), cell_size)
-		else:
-			for c in item.cells():
-				var r := Rect2(cell_origin(origin + c), Vector2(cell_size, cell_size)).grow(-inset)
-				draw_rect(r, color_for(item))
+		_draw_item(item, grid.origin_of[item], inset)
+
+
+## Draw one item (rarity backing, then icon or placeholder colour) at `origin`,
+## scaled to `alpha` (1.0 = opaque; faint for placed expansions).
+func _draw_item(item: Object, origin: Vector2i, inset: float, alpha := 1.0) -> void:
+	var bg := rarity_bg(item)
+	if bg.a > 0.0:
+		var bgc := Color(bg.r, bg.g, bg.b, bg.a * alpha)
+		for c in item.cells():
+			draw_rect(Rect2(cell_origin(origin + c), Vector2(cell_size, cell_size)), bgc)
+	var tex := icon_for(item)
+	if tex != null:
+		draw_icon(self, tex, item, cell_origin(origin), cell_size, alpha)
+	else:
+		var col := color_for(item)
+		col.a *= alpha
+		for c in item.cells():
+			var r := Rect2(cell_origin(origin + c), Vector2(cell_size, cell_size)).grow(-inset)
+			draw_rect(r, col)
 
 
 func _span() -> Vector2:
 	if grid == null:
 		return Vector2.ZERO
+	var cells: Array = grid.field_cells() if grid.has_method("field_cells") else grid.valid.keys()
 	var max_c := 0
 	var max_r := 0
-	for cell in grid.valid:
+	for cell in cells:
 		max_c = maxi(max_c, cell.x)
 		max_r = maxi(max_r, cell.y)
 	return Vector2(float(max_c + 1) * (cell_size + GAP), float(max_r + 1) * (cell_size + GAP))
@@ -112,7 +141,7 @@ static func icon_for(item: Object) -> Texture2D:
 ## corner (in `ci`'s local space), spun by its quarter-turn `rot`. The art is
 ## authored at rot 0; a 90/180/270 turn is an exact (lossless) rotation. Static so
 ## both the grid (placed items) and the drag ghost draw icons identically.
-static func draw_icon(ci: CanvasItem, tex: Texture2D, item: Object, top_left: Vector2, cell_px: int) -> void:
+static func draw_icon(ci: CanvasItem, tex: Texture2D, item: Object, top_left: Vector2, cell_px: int, alpha := 1.0) -> void:
 	var bc := 0
 	var br := 0
 	for c in item.cells():
@@ -123,5 +152,5 @@ static func draw_icon(ci: CanvasItem, tex: Texture2D, item: Object, top_left: Ve
 	var screen_size := Vector2(float(bc) * cell_px + float(bc - 1) * GAP, float(br) * cell_px + float(br - 1) * GAP)
 	var base_size := screen_size if item.rot % 2 == 0 else Vector2(screen_size.y, screen_size.x)
 	ci.draw_set_transform(top_left + screen_size * 0.5, float(item.rot) * PI * 0.5, Vector2.ONE)
-	ci.draw_texture_rect(tex, Rect2(-base_size * 0.5, base_size), false)
+	ci.draw_texture_rect(tex, Rect2(-base_size * 0.5, base_size), false, Color(1.0, 1.0, 1.0, alpha))
 	ci.draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)

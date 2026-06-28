@@ -22,6 +22,7 @@ const WeaponsSuite := preload("res://test/suites/weapons_suite.gd")
 const LootSuite := preload("res://test/suites/loot_suite.gd")
 const UiSuite := preload("res://test/suites/ui_suite.gd")
 const AudioSuite := preload("res://test/suites/audio_suite.gd")
+const ExpansionSuite := preload("res://test/suites/expansion_suite.gd")
 
 
 func _initialize() -> void:
@@ -29,6 +30,7 @@ func _initialize() -> void:
 	print("── running tests ──")
 	WorldSuite.new().run(t)        # world + inventory suites are pure/synchronous
 	InventorySuite.new().run(t)
+	ExpansionSuite.new().run(t)     # pure/synchronous, like the inventory suite
 	await MarineSuite.new().run(t) # the rest add nodes + await frames for _ready()
 	await EnemiesSuite.new().run(t)
 	await WeaponsSuite.new().run(t)

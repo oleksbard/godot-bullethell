@@ -13,12 +13,15 @@ const InventoryScript := preload("res://src/inventory/inventory.gd")
 const PlayerStatsScript := preload("res://src/marine/player_stats.gd")
 const MarineScript := preload("res://src/marine/marine.gd")
 const WeaponRingScript := preload("res://src/weapons/weapon_ring.gd")
+const WeaponCatalogScript := preload("res://src/weapons/weapon_catalog.gd")
+const WeaponDefScript := preload("res://src/weapons/weapon_def.gd")
 
 
 func run(t: TestContext) -> void:
 	_test_item_tooltip(t)
 	_test_grid_view(t)
 	_test_grid_view_colors(t)
+	await _test_grid_view_expandable(t)
 	await _test_wave_menu(t)
 	await _test_hud_clear_medals(t)
 	await _test_hud_xp_animation(t)
@@ -26,6 +29,10 @@ func run(t: TestContext) -> void:
 	await _test_reload_debuff(t)
 	await _test_shop_offers(t)
 	await _test_sell_item(t)
+	await _test_tooltip_expansion(t)
+	await _test_shop_expansion_offers(t)
+	await _test_expansion_pickup_move(t)
+	await _test_grid_view_substrate(t)
 
 
 func _test_grid_view_colors(t: TestContext) -> void:
@@ -89,6 +96,28 @@ func _test_grid_view(t: TestContext) -> void:
 	t.ok(bg.a > 0.0, "a non-Normal item gets a rarity background")
 	t.ok(is_equal_approx(bg.r, rare_col.r) and is_equal_approx(bg.g, rare_col.g) and is_equal_approx(bg.b, rare_col.b),
 		"the backing uses the existing assigned Rare colour")
+
+
+func _test_grid_view_expandable(t: TestContext) -> void:
+	t.suite = "GridView.expandable"
+	var inv: Node = InventoryScript.build()
+	var gv: Control = GridViewScript.new()
+	gv.setup(inv.backpack)
+	var step := GridViewScript.CELL + GridViewScript.GAP
+	t.ok(gv.custom_minimum_size.is_equal_approx(Vector2(8 * step, 6 * step)),
+		"an expandable grid view spans the full 8x6 field")
+	t.root().add_child(gv)
+	await t.frame()                       # exercise _draw (locked cells + base); a draw error surfaces in the run log
+	gv.free()
+
+	var e := InventoryItemScript.for_kind(InventoryItemScript.Kind.EXPAND_2X2)
+	t.ok(GridViewScript.color_for(e) == WeaponCatalogScript.get_def(WeaponCatalogScript.EXPAND_2X2).placeholder_color,
+		"an expansion's placeholder colour comes from its catalog def")
+	t.ok(GridViewScript.icon_for(InventoryItemScript.for_kind(InventoryItemScript.Kind.EXPAND_1X1)) != null,
+		"the 1x1 expansion icon loads once its art exists")
+	t.ok(GridViewScript.icon_for(InventoryItemScript.for_kind(InventoryItemScript.Kind.EXPAND_2X2)) != null,
+		"the 2x2 expansion icon loads once its art exists")
+	inv.free()
 
 
 func _test_wave_menu(t: TestContext) -> void:
@@ -271,6 +300,66 @@ func _test_shop_offers(t: TestContext) -> void:
 	st.free()
 
 
+func _test_tooltip_expansion(t: TestContext) -> void:
+	t.suite = "ItemTooltip.expansion"
+	var tip: Control = ItemTooltipScript.new()
+	t.root().add_child(tip)
+	await t.frame()                       # _ready sets the font
+	var e := InventoryItemScript.for_kind(InventoryItemScript.Kind.EXPAND_2X2)
+	tip._build_model(e, 21)
+	t.ok(not tip._show_power, "an expansion tooltip hides the power chip")
+	t.ok(tip._sub_text == "Inventory Expansion", "an expansion subtitle reads 'Inventory Expansion' (%s)" % tip._sub_text)
+	t.ok(not tip._sub_text.contains("Lvl"), "an expansion subtitle drops the level")
+	var p := InventoryItemScript.pistol()
+	tip._build_model(p, 21)
+	t.ok(tip._show_power, "a weapon still shows the power chip")
+	t.ok(tip._sub_text.contains("Lvl"), "a weapon subtitle keeps the level")
+	tip.free()
+
+
+func _test_shop_expansion_offers(t: TestContext) -> void:
+	t.suite = "WaveMenu.expansions"
+	var inv: Node = InventoryScript.build()
+	var st: Node = PlayerStatsScript.new()
+	st.souls = 1000
+	st.level = 10
+	var menu: CanvasLayer = WaveMenuScript.new()
+	menu.inventory = inv
+	menu.stats = st
+	menu._rng.seed = 7
+	t.root().add_child(menu)
+	await t.frame()
+
+	# Rolling many offer items yields both weapons and expansions.
+	var saw_exp := false
+	var saw_gun := false
+	for i in 200:
+		var it: Object = menu._roll_offer_item()
+		if it.item_type == WeaponDefScript.ItemType.EXPANSION:
+			saw_exp = true
+		else:
+			saw_gun = true
+	t.ok(saw_exp and saw_gun, "rolled offers include both expansions and weapons")
+
+	# An expansion offer is priced via the escalating inventory price.
+	var e := InventoryItemScript.for_kind(InventoryItemScript.Kind.EXPAND_2X2)
+	t.ok(menu._offer_price(e) == inv.expansion_price(WeaponCatalogScript.EXPAND_2X2),
+		"expansion offers use the escalating inventory price")
+
+	# Buying an expansion lands it in the stash and counts toward escalation.
+	menu.open(1)
+	var before: int = inv.expansion_count()
+	menu._offers[0] = {"item": e, "price": menu._offer_price(e), "sold": false}
+	menu._refresh_offer(0)
+	menu._buy(0)
+	t.ok(inv.expansion_count() == before + 1, "buying an expansion increases the owned count")
+
+	t.tree.paused = false
+	menu.free()
+	inv.free()
+	st.free()
+
+
 func _test_sell_item(t: TestContext) -> void:
 	t.suite = "WaveMenu.sell"
 	var inv: Node = InventoryScript.build()
@@ -295,3 +384,57 @@ func _test_sell_item(t: TestContext) -> void:
 	menu.free()
 	inv.free()
 	st.free()
+
+
+## Regression: picking an extender back up must remove it (re-lock its old cell) and
+## make a ghost. The old bug read grid.origin_of[item] (extenders aren't there), so
+## _begin_hold aborted before pick_up -> old slot stayed unlocked + no ghost.
+func _test_expansion_pickup_move(t: TestContext) -> void:
+	t.suite = "WaveMenu.expansion_move"
+	var inv: Node = InventoryScript.build()
+	var st: Node = PlayerStatsScript.new()
+	var menu: CanvasLayer = WaveMenuScript.new()
+	menu.inventory = inv
+	menu.stats = st
+	t.root().add_child(menu)
+	await t.frame()
+	menu.open(1)
+
+	var ext := InventoryItemScript.for_kind(InventoryItemScript.Kind.EXPAND_1X1)
+	var locked: Array = inv.backpack.locked_cells()
+	var old_cell: Vector2i = locked[0]
+	var new_cell: Vector2i = locked[1]            # a different locked cell to move it to later
+	t.ok(old_cell != new_cell, "two distinct locked cells exist")
+	t.ok(inv.drop(inv.backpack, ext, old_cell), "extender drops onto a locked cell")
+	t.ok(inv.backpack.valid.has(old_cell), "its cell is now unlocked")
+
+	menu._begin_hold(inv.backpack, ext)
+	t.ok(menu._held == ext and menu._ghost != null, "pick-up holds the extender and shows a ghost")
+	t.ok(menu._held_origin == old_cell, "the held origin is the extender's own cell, not a default")
+	t.ok(not inv.backpack.valid.has(old_cell), "picking it up re-locks its old cell (no orphan unlock)")
+
+	t.ok(inv.drop(inv.backpack, menu._held, new_cell), "the held extender drops on the new cell")
+	menu._end_hold()
+	t.ok(inv.backpack.valid.has(new_cell) and not inv.backpack.valid.has(old_cell),
+		"only the new cell is unlocked — the old slot did not stay unlocked")
+	t.tree.paused = false
+	menu.free()
+	inv.free()
+	st.free()
+
+
+## A placed extender renders faint (substrate alpha) under the slots, and drawing it
+## must not crash.
+func _test_grid_view_substrate(t: TestContext) -> void:
+	t.suite = "GridView.substrate"
+	t.ok(GridViewScript.SUBSTRATE_ALPHA > 0.0 and GridViewScript.SUBSTRATE_ALPHA < 1.0,
+		"placed expansions render translucently (%.2f)" % GridViewScript.SUBSTRATE_ALPHA)
+	var inv: Node = InventoryScript.build()
+	var ext := InventoryItemScript.for_kind(InventoryItemScript.Kind.EXPAND_1X1)
+	inv.drop(inv.backpack, ext, inv.backpack.locked_cells()[0])
+	var gv: Control = GridViewScript.new()
+	gv.setup(inv.backpack)
+	t.root().add_child(gv)
+	await t.frame()                       # draws the faint substrate + base; must not crash
+	gv.free()
+	inv.free()

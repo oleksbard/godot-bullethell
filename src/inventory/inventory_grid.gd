@@ -58,6 +58,17 @@ func item_at(cell: Vector2i) -> InventoryItemScript:
 	return occupancy.get(cell)
 
 
+## The placement origin of `item`. ExpandableGrid overrides to also resolve extenders
+## (which live in a separate substrate layer, not in `origin_of`).
+func origin_for(item: InventoryItemScript) -> Vector2i:
+	return origin_of.get(item, Vector2i.ZERO)
+
+
+## Default: any item can be picked up. ExpandableGrid overrides for covered extenders.
+func can_pick_up(_item: InventoryItemScript) -> bool:
+	return true
+
+
 ## Distinct placed items in row-major reading order (top->bottom, left->right).
 func items_in_reading_order() -> Array:
 	var ordered: Array = valid.keys()

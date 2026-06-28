@@ -89,10 +89,10 @@ func _test_inventory(t: TestContext) -> void:
 	var inv: Node = InventoryScript.build()
 	t.ok(inv.backpack.items_in_reading_order().size() == 2, "starts with 2 items in the backpack")
 	t.ok(inv.equipped_pistols().size() == 2, "both starting pistols are equipped")
-	# Exact starting placement matches the spec layout.
-	t.ok(inv.backpack.item_at(Vector2i(0, 1)) != null and inv.backpack.item_at(Vector2i(1, 3)) != null,
+	# Exact starting placement matches the spec layout (offset by BASE_OFFSET = (2,1)).
+	t.ok(inv.backpack.item_at(Vector2i(2, 2)) != null and inv.backpack.item_at(Vector2i(3, 4)) != null,
 		"left pistol occupies the left column + foot")
-	t.ok(inv.backpack.item_at(Vector2i(2, 1)) != null and inv.backpack.item_at(Vector2i(3, 3)) != null,
+	t.ok(inv.backpack.item_at(Vector2i(4, 2)) != null and inv.backpack.item_at(Vector2i(5, 4)) != null,
 		"right pistol occupies the right column + head")
 
 	var changes := [0]

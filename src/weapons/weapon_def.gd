@@ -5,7 +5,7 @@ extends RefCounted
 ## reads from it instead of branching on a specific kind. Reference via
 ## `const WeaponDefScript := preload(...)`. Build with WeaponDef.from({...}).
 
-enum ItemType { GUN, ARTIFACT, OTHER }       ## the "Type" tag shown in the tooltip
+enum ItemType { GUN, ARTIFACT, OTHER, EXPANSION }       ## the "Type" tag shown in the tooltip
 enum Pattern { SINGLE, SPREAD, BEAM }        ## firing behaviour; BEAM reserved (see Gun._fire)
 enum Body { PISTOL, SAWED_OFF }              ## which procedural body Gun builds when model_scene is null
 
@@ -26,6 +26,7 @@ var fire_interval: float = 1.7
 var magazine: int = 7
 var reload: float = 2.0
 var range: float = 12.0                        # display-only targeting range (≈ WeaponRing.MAX_RANGE)
+var base_price: int = 0                       # expansions: flat catalog price (shop applies escalation)
 
 # Firing
 var pattern: int = Pattern.SINGLE

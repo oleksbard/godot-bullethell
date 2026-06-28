@@ -57,6 +57,7 @@ var _tag_rects: Array[Rect2] = []   # pill rects (relative to this control)
 # Highlight chips: Power (always) + Price (BUY for shop offers / SELL for owned items).
 var _price_val := -1                # souls; -1 = no price chip
 var _price_is_buy := false          # true -> "BUY", false -> "SELL"
+var _show_power := true              # false for items with no power (e.g. expansions)
 var _power_text := ""
 var _price_text := ""               # "" when _price_val < 0
 var _hl_y := 0.0                    # highlight row top
@@ -139,10 +140,12 @@ func _build_model(item: Object, px: int) -> void:
 
 	_name_text = item.display_name()
 	var rarity: String = item.rarity()
-	_sub_text = "%s · Lvl %d" % [rarity, item.level()]
+	var lvl: int = item.level()
+	_sub_text = ("%s · Lvl %d" % [rarity, lvl]) if lvl > 0 else rarity
 	_sub_color = RARITY_COLORS.get(rarity, EMBER_DIM)
 	_tags = item.tags()
 	_power_text = str(item.power())
+	_show_power = item.power() > 0
 	_price_text = "" if _price_val < 0 else "%d %s" % [_price_val, "BUY" if _price_is_buy else "SELL"]
 	_rows = format_stats(item)
 	var flavor: String = item.flavor()
@@ -182,21 +185,29 @@ func _build_model(item: Object, px: int) -> void:
 		tags_right = tx - _s_tag * TAG_GAP
 		y += tag_h
 
-	# Highlight row: a Power chip (bolt + value), and a Price chip (mote + value) when set.
+	# Highlight row: a Power chip (when power > 0) and a Price chip (when set).
 	var hl_icon := float(_s_stat)
 	var hl_gap := _s_stat * HL_GAP
-	y += sect * 0.6
-	_hl_y = y
-	_hl_pw_text_x = pad + hl_icon + hl_gap
-	var hl_right := _hl_pw_text_x + _font.get_string_size(_power_text, HORIZONTAL_ALIGNMENT_LEFT, -1, _s_stat).x
-	if _price_text != "":
-		hl_right += _s_stat * HL_CHIP_GAP
-		_hl_mote_cx = hl_right + hl_icon * 0.5
-		_hl_price_text_x = hl_right + hl_icon + hl_gap
-		hl_right = _hl_price_text_x + _font.get_string_size(_price_text, HORIZONTAL_ALIGNMENT_LEFT, -1, _s_stat).x
+	var hl_right := pad
+	var has_hl := _show_power or _price_text != ""
+	if has_hl:
+		y += sect * 0.6
+		_hl_y = y
+		if _show_power:
+			_hl_pw_text_x = pad + hl_icon + hl_gap
+			hl_right = _hl_pw_text_x + _font.get_string_size(_power_text, HORIZONTAL_ALIGNMENT_LEFT, -1, _s_stat).x
+		if _price_text != "":
+			if _show_power:
+				hl_right += _s_stat * HL_CHIP_GAP
+			_hl_mote_cx = hl_right + hl_icon * 0.5
+			_hl_price_text_x = hl_right + hl_icon + hl_gap
+			hl_right = _hl_price_text_x + _font.get_string_size(_price_text, HORIZONTAL_ALIGNMENT_LEFT, -1, _s_stat).x
+		else:
+			_hl_mote_cx = -1.0
+		y += maxf(hl_icon, _font.get_height(_s_stat))
 	else:
+		_hl_y = -1.0
 		_hl_mote_cx = -1.0
-	y += maxf(hl_icon, _font.get_height(_s_stat))
 
 	y += sect
 	_sep1_y = y
@@ -239,15 +250,16 @@ func _draw() -> void:
 	_draw_line_text(Vector2(pad, _sub_y), _sub_text, _s_sub, _sub_color)
 	for i in _tags.size():
 		_draw_tag(_tag_rects[i], str(_tags[i]))
-	# Highlight chips: power-lightning + Power, soul glyph + Price (BUY/SELL).
-	var hl_icon := float(_s_stat)
-	var hl_h := _font.get_height(_s_stat)
-	var icon_top := _hl_y + (hl_h - hl_icon) * 0.5
-	draw_texture_rect(POWER_TEX, Rect2(pad, icon_top, hl_icon, hl_icon), false, POWER_COLOR)
-	_draw_line_text(Vector2(_hl_pw_text_x, _hl_y), _power_text, _s_stat, VALUE_COL)
-	if _hl_mote_cx >= 0.0:
-		draw_texture_rect(SOUL_TEX, Rect2(_hl_mote_cx - hl_icon * 0.5, icon_top, hl_icon, hl_icon), false, PRICE_COLOR)
-		_draw_line_text(Vector2(_hl_price_text_x, _hl_y), _price_text, _s_stat, PRICE_COLOR)
+	if _hl_y >= 0.0:
+		var hl_icon := float(_s_stat)
+		var hl_h := _font.get_height(_s_stat)
+		var icon_top := _hl_y + (hl_h - hl_icon) * 0.5
+		if _show_power:
+			draw_texture_rect(POWER_TEX, Rect2(pad, icon_top, hl_icon, hl_icon), false, POWER_COLOR)
+			_draw_line_text(Vector2(_hl_pw_text_x, _hl_y), _power_text, _s_stat, VALUE_COL)
+		if _hl_mote_cx >= 0.0:
+			draw_texture_rect(SOUL_TEX, Rect2(_hl_mote_cx - hl_icon * 0.5, icon_top, hl_icon, hl_icon), false, PRICE_COLOR)
+			_draw_line_text(Vector2(_hl_price_text_x, _hl_y), _price_text, _s_stat, PRICE_COLOR)
 	draw_line(Vector2(pad, _sep1_y), Vector2(size.x - pad, _sep1_y), SEP_COL, 1.0)
 	for i in _rows.size():
 		_draw_line_text(Vector2(pad, _row_ys[i]), _rows[i][0], _s_stat, EMBER_DIM)

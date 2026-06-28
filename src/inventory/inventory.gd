@@ -11,6 +11,8 @@ const Self := preload("res://src/inventory/inventory.gd")   # cold-load safe sel
 const InventoryItemScript := preload("res://src/inventory/inventory_item.gd")
 const InventoryGridScript := preload("res://src/inventory/inventory_grid.gd")
 const WeaponDefScript := preload("res://src/weapons/weapon_def.gd")
+const ExpandableGridScript := preload("res://src/inventory/expandable_grid.gd")
+const WeaponCatalogScript := preload("res://src/weapons/weapon_catalog.gd")
 
 # Backpack mask: _OO_ / OOOO / OOOO / OOOO (14 cells).
 const BACKPACK_CELLS: Array[Vector2i] = [
@@ -21,8 +23,12 @@ const BACKPACK_CELLS: Array[Vector2i] = [
 ]
 const STASH_COLS := 8
 const STASH_ROWS := 8
+const FIELD_COLS := 8
+const FIELD_ROWS := 6
+const BASE_OFFSET := Vector2i(2, 1)            # centers the 14-cell base in the 8x6 field
+const EXPANSION_PRICE_GROWTH := 1.6            # price multiplier per expansion already owned
 
-var backpack: InventoryGridScript
+var backpack: ExpandableGridScript
 var stash: InventoryGridScript
 
 
@@ -30,13 +36,16 @@ var stash: InventoryGridScript
 ## start equipped, reproducing the spec layout (_OO_ / XOXX / XOOX / XXOX).
 static func build() -> Self:
 	var inv := Self.new()
-	inv.backpack = InventoryGridScript.from_cells(BACKPACK_CELLS)
+	var base_cells: Array[Vector2i] = []
+	for c in BACKPACK_CELLS:
+		base_cells.append(c + BASE_OFFSET)
+	inv.backpack = ExpandableGridScript.backpack(base_cells, FIELD_COLS, FIELD_ROWS)
 	inv.stash = InventoryGridScript.rect(STASH_COLS, STASH_ROWS)
 	var left := InventoryItemScript.pistol()            # rot 0, left column + foot
-	inv.backpack.place(left, Vector2i(0, 1))
+	inv.backpack.place(left, Vector2i(0, 1) + BASE_OFFSET)   # -> (2, 2)
 	var right := InventoryItemScript.pistol()
 	right.rot = 2                                        # 180° L, right column + head
-	inv.backpack.place(right, Vector2i(2, 1))
+	inv.backpack.place(right, Vector2i(2, 1) + BASE_OFFSET)  # -> (4, 2)
 	return inv
 
 
@@ -60,6 +69,22 @@ func loadout_power() -> int:
 	for it in equipped_guns():
 		p += it.power()
 	return p
+
+
+## How many expansion items the player owns (placed in the backpack + stored in the
+## stash). Drives the shop's escalating expansion price.
+func expansion_count() -> int:
+	var n: int = backpack.ext_origin.size()
+	for it in stash.items_in_reading_order():
+		if it.item_type == WeaponDefScript.ItemType.EXPANSION:
+			n += 1
+	return n
+
+
+## The current soul price of an expansion of `kind`: base price × growth^owned.
+func expansion_price(kind: int) -> int:
+	var base_price: int = WeaponCatalogScript.get_def(kind).base_price
+	return roundi(float(base_price) * pow(EXPANSION_PRICE_GROWTH, float(expansion_count())))
 
 
 ## Place `item` in the stash at the first cell (reading order) where it fits; returns

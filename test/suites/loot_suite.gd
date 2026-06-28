@@ -228,6 +228,13 @@ func _test_item_level_and_power(t: TestContext) -> void:
 	t.ok(p5.buy_price() == 112 and p5.sell_price() == roundi(112.0 * 0.65),
 		"L5 pistol price scales (buy %d, sell %d)" % [p5.buy_price(), p5.sell_price()])
 
+	# Sawed-off carries a higher per-weapon base price (14); derived prices scale from it.
+	var sg1 := InventoryItemScript.for_kind(InventoryItemScript.Kind.SAWED_OFF)
+	t.ok(sg1.buy_price() == 14, "L1 sawed-off buys for 14 (dearer than the pistol's 10, got %d)" % sg1.buy_price())
+	var sg5 := InventoryItemScript.for_kind(InventoryItemScript.Kind.SAWED_OFF)
+	sg5.item_level = 5
+	t.ok(sg5.buy_price() == roundi(14.0 * pow(5.0, 1.5)), "L5 sawed-off price scales from its 14 base (got %d)" % sg5.buy_price())
+
 	# Magazine + reload: 7 rounds; L1 reloads in 2.0s; higher level reloads faster.
 	t.ok(p1.magazine_size() == 7, "pistol magazine is 7")
 	t.ok(is_equal_approx(p1.reload_time_value(), 2.0), "L1 reload time is 2.0s (got %.2f)" % p1.reload_time_value())

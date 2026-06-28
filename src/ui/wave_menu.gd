@@ -21,6 +21,7 @@ const UiFxScript := preload("res://src/ui/ui_fx.gd")
 const InventorySfxScript := preload("res://src/audio/inventory_sfx.gd")
 const InventoryItemScript := preload("res://src/inventory/inventory_item.gd")
 const WeaponCatalogScript := preload("res://src/weapons/weapon_catalog.gd")
+const WeaponDefScript := preload("res://src/weapons/weapon_def.gd")
 
 const DIM := Color(0.02, 0.0, 0.0, 1.0)   # solid near-black: a clean modal backdrop (also hides the frozen HUD banner behind it)
 const EMBER := Color(1.0, 0.45, 0.2)
@@ -30,9 +31,11 @@ const PANEL_BG := Color(0.06, 0.02, 0.02, 0.92)
 const BTN_BG := Color(0.06, 0.02, 0.02, 0.92)
 const DROP_FLASH := Color(1.0, 0.85, 0.55, 0.5)   # warm flash over a freshly-dropped item
 const SHOP_SLOTS := 4                              # 4 rolled offers per level-up
+const EXPANSION_OFFER_CHANCE := 0.25              # chance a rolled slot is an expansion (else a weapon)
 const UNAFFORDABLE := Color(0.7, 0.35, 0.3)        # price colour when you can't afford it
 const SOLD_DIM := Color(0.5, 0.5, 0.5, 0.8)        # icon tint for an unaffordable offer
 const SELL_HI := Color(0.45, 1.0, 0.55)            # sell-zone accent (green = you get paid)
+const DENY := Color(1.0, 0.3, 0.3, 0.5)           # flash over an extender that can't be picked up (gun on it)
 
 # Scaling: the centred content is sized to cover this fraction of the viewport's
 # limiting dimension (so it fills the screen but keeps its aspect), centred.
@@ -376,6 +379,11 @@ func _on_click(screen_pos: Vector2) -> void:
 	if _held == null:
 		var it: Object = grid.item_at(cell)
 		if it != null:
+			if grid.has_method("can_pick_up") and not grid.can_pick_up(it):
+				var view: Control = hit[0]
+				var rect := Rect2(view.global_position + view.cell_origin(cell), Vector2(_cell_size, _cell_size))
+				_flash_rect(rect, DENY)
+				return
 			_begin_hold(grid, it)
 			_update_ghost(screen_pos)
 	else:
@@ -394,7 +402,7 @@ func _on_click(screen_pos: Vector2) -> void:
 func _begin_hold(grid: Object, item: Object) -> void:
 	_held = item
 	_held_from = grid
-	_held_origin = grid.origin_of[item]
+	_held_origin = grid.origin_for(item)         # extenders live in a separate layer (not origin_of)
 	if _tooltip != null:
 		_tooltip.hide_tip()                       # picked up -> no hover tooltip while dragging
 	var center := _footprint_rect(_view_of(grid), _held_origin, item).get_center()
@@ -416,9 +424,10 @@ func _update_tooltip(screen_pos: Vector2) -> void:
 		if it != null:
 			price = it.sell_price()
 	else:
-		it = _offer_at(screen_pos)               # hovering a shop offer shows its stats too
-		if it != null:
-			price = it.buy_price()
+		var oi := _offer_index_at(screen_pos)
+		if oi >= 0:
+			it = _offers[oi]["item"]
+			price = int(_offers[oi]["price"])
 			is_buy = true
 	if it == null:
 		_tooltip.hide_tip()
@@ -461,17 +470,34 @@ func _update_loadout_power() -> void:
 
 # --- shop -------------------------------------------------------------------
 
-## Roll 4 fresh offers off the player's level + rarity_bonus, and paint the slots.
+## Roll 4 fresh offers (each a weapon or — at EXPANSION_OFFER_CHANCE — an expansion),
+## and paint the slots.
 func _roll_offers() -> void:
 	_offers.clear()
+	for i in SHOP_SLOTS:
+		var item := _roll_offer_item()
+		_offers.append({"item": item, "price": _offer_price(item), "sold": false})
+		_refresh_offer(i)
+
+
+## Roll one offer item: an expansion (EXPANSION_OFFER_CHANCE) or a leveled weapon.
+func _roll_offer_item() -> Object:
 	var player_level: int = stats.level if stats != null else 1
 	var rb: float = stats.rarity_bonus if stats != null else 0.0
-	var kinds: Array = WeaponCatalogScript.weapon_kinds()
-	for i in SHOP_SLOTS:
-		var kind: int = kinds[_rng.randi_range(0, kinds.size() - 1)]
-		var item := InventoryItemScript.rolled_weapon(kind, player_level, rb, _rng)
-		_offers.append({"item": item, "price": item.buy_price(), "sold": false})
-		_refresh_offer(i)
+	if _rng.randf() < EXPANSION_OFFER_CHANCE:
+		var ek: Array = WeaponCatalogScript.expansion_kinds()
+		var ekind: int = ek[_rng.randi_range(0, ek.size() - 1)]
+		return InventoryItemScript.for_kind(ekind)
+	var wk: Array = WeaponCatalogScript.weapon_kinds()
+	var wkind: int = wk[_rng.randi_range(0, wk.size() - 1)]
+	return InventoryItemScript.rolled_weapon(wkind, player_level, rb, _rng)
+
+
+## An expansion's price escalates with how many you own; a weapon uses its buy price.
+func _offer_price(item: Object) -> int:
+	if item.item_type == WeaponDefScript.ItemType.EXPANSION:
+		return inventory.expansion_price(item.kind)
+	return item.buy_price()
 
 
 ## Paint offer slot `index`: icon, price, rarity border, and affordable/sold state.
@@ -488,6 +514,7 @@ func _refresh_offer(index: int) -> void:
 		_style_offer(btn, EMBER_DIM)
 		return
 	var item: Object = offer["item"]
+	offer["price"] = _offer_price(item)          # live: expansions re-price as the owned count changes
 	var affordable: bool = stats != null and stats.souls >= int(offer["price"])
 	icon.texture = GridViewScript.icon_for(item)
 	icon.modulate = Color.WHITE if affordable else SOLD_DIM
@@ -521,13 +548,13 @@ func _buy(index: int) -> void:
 	UiFxScript.ring(_root, center, SOUL, _cell_size * 1.5, maxf(3.0, _cell_size * 0.12))
 
 
-## The item under `screen_pos` if it's an unsold shop offer, else null (for the tooltip).
-func _offer_at(screen_pos: Vector2) -> Object:
+## The index of the unsold shop offer under `screen_pos`, or -1 (for the tooltip).
+func _offer_index_at(screen_pos: Vector2) -> int:
 	for i in _offer_buttons.size():
 		if i < _offers.size() and not _offers[i]["sold"]:
 			if _offer_buttons[i].get_global_rect().has_point(screen_pos):
-				return _offers[i]["item"]
-	return null
+				return i
+	return -1
 
 
 # --- sell -------------------------------------------------------------------

@@ -6,7 +6,7 @@ extends RefCounted
 ## stats, descriptions) lives in the WeaponCatalog, keyed by `kind` — this script
 ## just applies the shared level-scaling on top and exposes a generic tooltip API.
 
-enum Kind { PISTOL, SAWED_OFF }
+enum Kind { PISTOL, SAWED_OFF, EXPAND_1X1, EXPAND_2X2 }
 
 const Self := preload("res://src/inventory/inventory_item.gd")   # cold-load safe self-ref
 const WeaponCatalogScript := preload("res://src/weapons/weapon_catalog.gd")   # per-weapon data
@@ -45,6 +45,21 @@ var rot: int = 0
 ## The catalog def for this item's kind (single source of per-weapon data).
 func _def() -> WeaponDefScript:
 	return WeaponCatalogScript.get_def(kind)
+
+
+## True for expansion (inventory-grid extender) items — they branch the stat API.
+func _is_expansion() -> bool:
+	return item_type == WeaponDefScript.ItemType.EXPANSION
+
+
+## rot-0 bounding box (width, height) in cells.
+func _bbox() -> Vector2i:
+	var w := 0
+	var h := 0
+	for c in base_cells:
+		w = maxi(w, c.x)
+		h = maxi(h, c.y)
+	return Vector2i(w + 1, h + 1)
 
 
 ## A fresh level-1 item of `kind` (rot 0): shape + type pulled from the catalog.
@@ -107,6 +122,8 @@ func display_name() -> String:
 
 ## Rarity tier (Normal | Rare | Unique | Legendary), banded from the item level.
 func rarity() -> String:
+	if _is_expansion():
+		return "Inventory Expansion"
 	if item_level >= 6:
 		return RARITY_LEGENDARY
 	if item_level >= 4:
@@ -118,6 +135,8 @@ func rarity() -> String:
 
 ## Item level (the rolled value). Drives rarity, stats, and power.
 func level() -> int:
+	if _is_expansion():
+		return 0
 	return item_level
 
 
@@ -144,6 +163,8 @@ func reload_time_value() -> float:
 ## Combat-value score, normalized so a level-1 weapon = POWER_BASE (10). Scales with
 ## DPS (damage × shots/sec). The level-up menu sums this over equipped items.
 func power() -> int:
+	if _is_expansion():
+		return 0
 	var def := _def()
 	var base_dps := def.damage * 60.0 / def.fire_interval
 	var dps := damage_value() * 60.0 / fire_interval_value()
@@ -152,25 +173,34 @@ func power() -> int:
 
 ## Soul cost to buy this item from the shop (scales with level).
 func buy_price() -> int:
-	return roundi(BASE_PRICE * pow(float(item_level), PRICE_EXP))
+	if _is_expansion():
+		return _def().base_price
+	var base: float = float(_def().base_price) if _def().base_price > 0 else BASE_PRICE
+	return roundi(base * pow(float(item_level), PRICE_EXP))
 
 
 ## Souls returned for selling an owned item — SELL_FRACTION of its buy price.
 func sell_price() -> int:
+	if _is_expansion():
+		return roundi(float(_def().base_price) * SELL_FRACTION)
 	return roundi(float(buy_price()) * SELL_FRACTION)
 
 
-## The Type tag value: Gun | Artifact | Other.
+## The Type tag value: Gun | Artifact | Expansion | Other.
 func type_name() -> String:
 	match _def().item_type:
 		WeaponDefScript.ItemType.GUN: return "Gun"
 		WeaponDefScript.ItemType.ARTIFACT: return "Artifact"
+		WeaponDefScript.ItemType.EXPANSION: return "Expansion"
 	return "Other"
 
 
 ## Header tags (pills under the rarity/level line): the weapon's traits + its Type.
-## Generic — the tooltip renders whatever it gets.
+## Generic — the tooltip renders whatever it gets. Expansions show no pills (the
+## "Inventory Expansion" subtitle already names them).
 func tags() -> Array:
+	if _is_expansion():
+		return []
 	var out: Array = _def().traits.duplicate()
 	out.append(type_name())
 	return out
@@ -185,6 +215,9 @@ func flavor() -> String:
 ## The ItemTooltip hides false/zero entries, so pattern-specific rows (Pellets/Spread)
 ## and unimplemented stats (Knockback/Piercing/Ricochet) only show when they apply.
 func stats() -> Array:
+	if _is_expansion():
+		var bb := _bbox()
+		return [["Size", "%dx%d" % [bb.x, bb.y]], ["Slots", base_cells.size()]]
 	var def := _def()
 	var rows: Array = [
 		["Damage", roundi(damage_value())],
