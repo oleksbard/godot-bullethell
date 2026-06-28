@@ -5,7 +5,7 @@ extends Node3D
 ## and within ATTACK_RANGE plays a forward-jab attack pose (no damage yet). Registers
 ## in the "imps" group so weapons can target it and the off-screen indicator finds it.
 
-signal died(world_pos: Vector3, xp_value: float)   # for the XP-orb field; emitted once on death
+signal died(world_pos: Vector3, xp_value: float, soul_value: int)   # for the XP-orb field; emitted once on death
 
 const Gore := preload("res://src/fx/gore.gd")
 const DamageNumberScript := preload("res://src/fx/damage_number.gd")
@@ -60,6 +60,8 @@ var max_hp := BASE_HP
 var hp := BASE_HP                # set by the spawner per wave; depleted by take_damage()
 var attack_damage := BASE_ATTACK_DAMAGE   # damage per melee hit; spawner scales per wave
 var xp_value := BASE_XP          # XP this imp grants when killed; spawner scales per wave
+var body_scale := 1.0            # full-grown node scale; spawner bumps it for elite-wave champions
+var soul_value := 1              # souls this imp drops (1 + difficulty/champion bonus); spawner sets it
 var _attack_cd := 0.0            # cooldown until this imp can hit the player again
 var _dead := false
 var _emerge := 0.0               # seconds left frozen in the spawn portal
@@ -70,6 +72,7 @@ var _attack := 0.0               # 0 idle .. 1 attacking, smoothed
 var _hit_flash := 0.0            # seconds left of the white hurt-flash
 var _knock := Vector3.ZERO       # decaying knockback velocity from the last hit
 var _slow := 0.0                 # seconds left of the post-hit slow
+var _dmg_number: DamageNumberScript = null   # this imp's active floating number; repeated hits accumulate into it
 
 
 func _ready() -> void:
@@ -86,7 +89,7 @@ func die(blood_spatters: int = 3, hit_dir: Vector3 = Vector3.ZERO) -> void:
 		return                          # guard: two bolts can land the same frame
 	_dead = true
 	remove_from_group(GROUP)            # stop other guns/bolts targeting a corpse
-	died.emit(global_position, xp_value)   # the orb field drops an XP orb here
+	died.emit(global_position, xp_value, soul_value)   # the orb field drops the XP orb + any bonus soul-motes here
 	Gore.spawn_death(get_parent(), global_position, BODY_COLOR, blood_spatters, hit_dir)
 	_spawn_corpse()                     # detach the body to crumple + sink on its own
 	queue_free()
@@ -120,7 +123,10 @@ func _spawn_corpse() -> void:
 func take_damage(amount: float, blood_spatters: int = 3, hit_dir: Vector3 = Vector3.ZERO) -> void:
 	if _dead:
 		return
-	DamageNumberScript.spawn(get_parent(), global_position + Vector3(0.0, IMP_HEIGHT * 0.9, 0.0), amount, DMG_NUMBER_COLOR)
+	if is_instance_valid(_dmg_number):
+		_dmg_number.add(amount)                      # already showing -> accumulate into the one number
+	else:
+		_dmg_number = DamageNumberScript.spawn(get_parent(), global_position + Vector3(0.0, IMP_HEIGHT * 0.9, 0.0), amount, DMG_NUMBER_COLOR)
 	hp -= amount
 	if hp <= 0.0:
 		die(blood_spatters, hit_dir)
@@ -143,7 +149,7 @@ func _react_to_hit(hit_dir: Vector3) -> void:
 func emerge(duration: float) -> void:
 	_emerge = duration
 	_emerge_total = duration
-	scale = Vector3.ONE * EMERGE_SCALE_FROM
+	scale = Vector3.ONE * (EMERGE_SCALE_FROM * body_scale)
 
 
 func _process(delta: float) -> void:
@@ -156,10 +162,10 @@ func _process(delta: float) -> void:
 	if _emerge > 0.0:
 		_emerge -= delta
 		var p := 1.0 - clampf(_emerge / _emerge_total, 0.0, 1.0)   # 0 -> 1
-		scale = Vector3.ONE * lerpf(EMERGE_SCALE_FROM, 1.0, p)
+		scale = Vector3.ONE * (lerpf(EMERGE_SCALE_FROM, 1.0, p) * body_scale)
 		if _emerge > 0.0:
 			return
-		scale = Vector3.ONE
+		scale = Vector3.ONE * body_scale
 
 	if player == null:
 		return

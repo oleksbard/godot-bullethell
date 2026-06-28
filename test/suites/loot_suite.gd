@@ -13,11 +13,13 @@ const PlayerStatsScript := preload("res://src/marine/player_stats.gd")
 const HudScript := preload("res://src/ui/hud.gd")
 const InventoryItemScript := preload("res://src/inventory/inventory_item.gd")
 const InventoryScript := preload("res://src/inventory/inventory.gd")
+const DamageNumberScript := preload("res://src/fx/damage_number.gd")
 
 
 func run(t: TestContext) -> void:
 	await _test_xp_orb(t)
 	await _test_xp_orb_field(t)
+	await _test_wave_drain(t)
 	_test_xp_curve(t)
 	await _test_souls(t)
 	_test_spend_souls(t)
@@ -27,6 +29,7 @@ func run(t: TestContext) -> void:
 	_test_player_heal(t)
 	await _test_health_vial(t)
 	await _test_health_vial_field(t)
+	await _test_damage_number_accumulates(t)
 
 
 func _test_xp_orb(t: TestContext) -> void:
@@ -118,7 +121,43 @@ func _test_xp_orb_field(t: TestContext) -> void:
 	field.vacuum_all()
 	t.ok(orb._vacuum, "vacuum_all() flags every orb to fly in")
 
+	var n0 := field.get_child_count()
+	field.drop_orb(Vector3(5.0, 0.0, 5.0), 0.0, 4)    # a 4-soul kill bursts into 4 motes (1 main + 3 bonus)
+	t.ok(field.get_child_count() == n0 + 4, "a 4-soul drop bursts into 4 motes (got %d)" % (field.get_child_count() - n0))
+
 	await t.frame()
+	holder.free()
+
+
+## On a wave clear the field vacuums leftover souls and only emits `drained` (which Main uses
+## to open the wave menu) once they've all flown into the player.
+func _test_wave_drain(t: TestContext) -> void:
+	t.suite = "XpOrbField.drain"
+	var holder := Node3D.new()
+	t.root().add_child(holder)
+	var player := Node3D.new()
+	holder.add_child(player)
+	var field: Node3D = XpOrbFieldScript.new()
+	field.player = player
+	holder.add_child(field)
+	await t.frame()
+	var fired := [0]
+	field.drained.connect(func() -> void: fired[0] += 1)
+
+	field.drop_orb(Vector3(9.0, 0.0, 0.0), 0.0, 1)    # one leftover soul, far from the player
+	var orb := field.get_child(field.get_child_count() - 1)
+	orb.set_process(false)                            # freeze it so it can't self-collect mid-test
+	field.vacuum_all()
+	field._process(0.1)
+	t.ok(fired[0] == 0, "drained holds while a soul is still in the field")
+
+	orb.free()                                        # the soul reaches the player (orb freed)
+	field._process(0.1)
+	t.ok(fired[0] == 1, "drained fires once every soul has flown in")
+
+	field.vacuum_all()                                # no leftover souls -> menu can open at once
+	field._process(0.1)
+	t.ok(fired[0] == 2, "an empty field drains immediately")
 	holder.free()
 
 
@@ -352,4 +391,21 @@ func _test_health_vial_field(t: TestContext) -> void:
 		field._process(HealthVialFieldScript.DROP_INTERVAL + 1.0)
 	var k: int = t.nodes_in_group(HealthVialScript.GROUP).size()
 	t.ok(k == 1, "drops no more vials than the missing HP needs (down 10 -> %d)" % k)
+	holder.free()
+
+
+## Repeated hits accumulate into one floating number (which grows, capped at BASE_FONT).
+func _test_damage_number_accumulates(t: TestContext) -> void:
+	t.suite = "DamageNumber"
+	var holder := Node3D.new()
+	t.root().add_child(holder)
+	var n: Node3D = DamageNumberScript.spawn(holder, Vector3.ZERO, 5.0, Color.WHITE)
+	await t.frame()
+	var f0: int = n.font_size
+	n.add(7.0)
+	n.add(7.0)
+	t.ok(is_equal_approx(n._amount, 19.0), "repeated hits accumulate into one number (got %s)" % n._amount)
+	t.ok(n.text == "19", "the displayed text reflects the running total")
+	t.ok(n.font_size > f0, "the number grows as it accumulates")
+	t.ok(n.font_size <= DamageNumberScript.BASE_FONT, "font growth is capped at BASE_FONT")
 	holder.free()

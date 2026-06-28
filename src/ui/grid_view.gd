@@ -2,10 +2,11 @@ class_name GridView
 extends Control
 ## Renders one InventoryGrid: a dark ember-bordered slot per valid cell and a
 ## placeholder coloured block per placed item (real item art comes later). Also maps
-## a local mouse position to a grid cell so the LevelUpMenu can pick/place. Pure view:
+## a local mouse position to a grid cell so the WaveMenu can pick/place. Pure view:
 ## it reads the grid live and redraws; it never mutates the grid.
 
 const ItemTooltipScript := preload("res://src/ui/item_tooltip.gd")   # shared rarity palette
+const WeaponCatalogScript := preload("res://src/weapons/weapon_catalog.gd")   # per-weapon icon + placeholder colour
 
 const CELL := 44                  # px per cell
 const GAP := 2                    # px between cells
@@ -14,11 +15,6 @@ const RARITY_BG_ALPHA := 0.30     # translucency of the rarity backing behind no
 
 const SLOT_BG := Color(0.05, 0.02, 0.02, 0.9)
 const SLOT_BORDER := Color(0.62, 0.22, 0.1)
-const PISTOL_COLOR := Color(0.45, 0.55, 0.75, 0.95)
-
-# InventoryItem.Kind -> rot-0 icon (made by the add-item-art skill). Missing file
-# => falls back to the colored block, so this is safe before any art exists.
-const ITEM_TEXTURE_PATHS := {0: "res://art/items/pistol.png"}   # 0 = Kind.PISTOL
 
 var grid: Object                  # InventoryGrid; set via setup()
 var cell_size := CELL             # px per cell; raised by the menu to scale the grid up crisply
@@ -71,7 +67,7 @@ func _draw() -> void:
 		else:
 			for c in item.cells():
 				var r := Rect2(cell_origin(origin + c), Vector2(cell_size, cell_size)).grow(-inset)
-				draw_rect(r, _item_color(item))
+				draw_rect(r, color_for(item))
 
 
 func _span() -> Vector2:
@@ -85,8 +81,10 @@ func _span() -> Vector2:
 	return Vector2(float(max_c + 1) * (cell_size + GAP), float(max_r + 1) * (cell_size + GAP))
 
 
-func _item_color(_item: Object) -> Color:
-	return PISTOL_COLOR            # only pistols exist now; key on kind later
+## Placeholder block colour for an item (when it has no icon art), from its catalog
+## def. Static so any item view can reuse it.
+static func color_for(item: Object) -> Color:
+	return WeaponCatalogScript.get_def(item.kind).placeholder_color
 
 
 ## Translucent rarity backing for an item, or fully-transparent for Normal (no tint).
@@ -105,7 +103,7 @@ static func rarity_bg(item: Object) -> Color:
 static func icon_for(item: Object) -> Texture2D:
 	var kind: int = item.kind
 	if not _icon_cache.has(kind):
-		var path: String = ITEM_TEXTURE_PATHS.get(kind, "")
+		var path: String = WeaponCatalogScript.get_def(kind).icon_path
 		_icon_cache[kind] = load(path) if path != "" and ResourceLoader.exists(path) else null
 	return _icon_cache[kind]
 

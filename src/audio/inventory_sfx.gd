@@ -1,7 +1,7 @@
 class_name InventorySfx
 extends Node
 ## One-shot UI sounds for the grid inventory: pick (lift an item out of a slot) and
-## drop (seat it into one). Owned by the LevelUpMenu, which plays while the tree is
+## drop (seat it into one). Owned by the WaveMenu, which plays while the tree is
 ## PAUSED — so this node runs with PROCESS_MODE_ALWAYS and its pooled players inherit
 ## it, otherwise the pause would mute them. A small shared pool keeps a fast
 ## click-drag from cutting clips off; slight pitch jitter varies repeats so they read

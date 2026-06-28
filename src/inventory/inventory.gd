@@ -10,6 +10,7 @@ signal changed
 const Self := preload("res://src/inventory/inventory.gd")   # cold-load safe self-ref
 const InventoryItemScript := preload("res://src/inventory/inventory_item.gd")
 const InventoryGridScript := preload("res://src/inventory/inventory_grid.gd")
+const WeaponDefScript := preload("res://src/weapons/weapon_def.gd")
 
 # Backpack mask: _OO_ / OOOO / OOOO / OOOO (14 cells).
 const BACKPACK_CELLS: Array[Vector2i] = [
@@ -39,19 +40,24 @@ static func build() -> Self:
 	return inv
 
 
-## Pistol items currently in the backpack, in reading order (these are equipped).
-func equipped_pistols() -> Array:
+## Weapon items currently in the backpack, in reading order (these are equipped).
+func equipped_guns() -> Array:
 	var out: Array = []
 	for it in backpack.items_in_reading_order():
-		if it.kind == InventoryItemScript.Kind.PISTOL:
+		if it.item_type == WeaponDefScript.ItemType.GUN:
 			out.append(it)
 	return out
+
+
+## Deprecated alias for equipped_guns() (all equipped items are guns today).
+func equipped_pistols() -> Array:
+	return equipped_guns()
 
 
 ## Total combat power of the equipped (backpack) pistols — drives the next wave.
 func loadout_power() -> int:
 	var p := 0
-	for it in equipped_pistols():
+	for it in equipped_guns():
 		p += it.power()
 	return p
 

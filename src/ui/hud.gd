@@ -42,6 +42,7 @@ const PORTRAIT := 116
 const HP_SIZE := Vector2(360, 40)
 const LVLUP_MAX := 10       # cap the level-up medal stack so it can't overflow
 const LVLUP_STACK_OFFSET := 10   # px each stacked medal is shifted right of the one below
+const LVLUP_MEDAL_SIZE := 34   # px of one level-up medal (also the medal row's height)
 const STATUS_SIZE := 72    # buff/debuff badge size — much bigger than a 34px level-up medal
 
 # Portrait framing — a face/mug shot aimed at the rig's Head bone. Distances are
@@ -337,7 +338,11 @@ func _build_status_row(root: Control) -> void:
 	_reload_icon.icon = RELOAD_ICON
 	_reload_icon.custom_minimum_size = Vector2(STATUS_SIZE, STATUS_SIZE)
 	_reload_icon.size = Vector2(STATUS_SIZE, STATUS_SIZE)
-	_reload_icon.position = Vector2(MARGIN + PORTRAIT + MARGIN, XP_HEIGHT + MARGIN + int(HP_SIZE.y) + 8)
+	# A row BELOW the level-up medals (which fan horizontally from the same left edge),
+	# so the big reload badge never lands on top of the medal pile.
+	_reload_icon.position = Vector2(
+		MARGIN + PORTRAIT + MARGIN,
+		XP_HEIGHT + MARGIN + int(HP_SIZE.y) + 8 + LVLUP_MEDAL_SIZE + 8)
 	_reload_icon.visible = false
 	root.add_child(_reload_icon)
 
@@ -361,7 +366,7 @@ func _add_lvlup_medal() -> void:
 	var i := _lvlup_stack.get_child_count()
 	if i >= LVLUP_MAX:
 		return
-	var sz := 34
+	var sz := LVLUP_MEDAL_SIZE
 	var medal := Panel.new()
 	medal.size = Vector2(sz, sz)
 	medal.position = Vector2(i * LVLUP_STACK_OFFSET, 0.0)   # overlapping pile, fanned right

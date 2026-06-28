@@ -29,23 +29,30 @@ var _rng := RandomNumberGenerator.new()
 
 func _ready() -> void:
 	_rng.randomize()
-
-	var loudest := CLIP_PEAKS_DB[0]
-	for v in CLIP_PEAKS_DB:
-		loudest = maxf(loudest, v)
-	var target: float = loudest + MASTER_DB + NINETY_PCT_DB   # common effective peak
-
-	for i in CLIPS.size():
-		var s: AudioStream = load(CLIPS[i])
-		if s is AudioStreamMP3:
-			s.loop = false        # one-shot — never loop a gunshot
-		_streams.append(s)
-		_volumes.append(target - CLIP_PEAKS_DB[i])            # boost quiet clips, trim loud ones
-
 	for i in POOL:
 		var p := AudioStreamPlayer.new()
 		add_child(p)
 		_players.append(p)
+	configure(CLIPS, CLIP_PEAKS_DB)        # default: the pistol set
+
+
+## Load an arbitrary clip set, evening each clip to a common effective peak. An empty
+## peaks_db skips the per-clip trim (all clips play at the master level).
+func configure(clips: Array, peaks_db: Array) -> void:
+	_streams.clear()
+	_volumes.clear()
+	var have_peaks := peaks_db.size() == clips.size()
+	var loudest := -120.0
+	if have_peaks:
+		for v in peaks_db:
+			loudest = maxf(loudest, v)
+	var target: float = loudest + MASTER_DB + NINETY_PCT_DB
+	for i in clips.size():
+		var s: AudioStream = load(clips[i])
+		if s is AudioStreamMP3:
+			s.loop = false
+		_streams.append(s)
+		_volumes.append((target - peaks_db[i]) if have_peaks else MASTER_DB)
 
 
 ## Fire-and-forget: play a random clip (volume-evened) on the next pooled player.

@@ -34,6 +34,22 @@ func _test_inventory_item(t: TestContext) -> void:
 		shapes[str(t.sorted_cells(p.cells()))] = true
 	t.ok(shapes.size() == 4, "the four rotations are distinct (%d)" % shapes.size())
 
+	# A catalog weapon flows through generically.
+	var sg := InventoryItemScript.for_kind(InventoryItemScript.Kind.SAWED_OFF)
+	t.ok(sg.display_name() == "Sawed-Off", "for_kind(SAWED_OFF) names itself from the catalog")
+	t.ok(sg.cells().size() == 3, "sawed-off grid shape comes from the catalog (3 cells, vertical)")
+	var labels: Array = []
+	for row in sg.stats():
+		labels.append(row[0])
+	t.ok(labels.has("Pellets"), "a SPREAD weapon's stats include a Pellets row")
+	t.ok(InventoryItemScript.pistol().display_name() == "Pistol", "pistol() still reads its name from the catalog")
+
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 1
+	var rolled := InventoryItemScript.rolled_weapon(InventoryItemScript.Kind.SAWED_OFF, 8, 0.0, rng)
+	t.ok(rolled.kind == InventoryItemScript.Kind.SAWED_OFF and rolled.item_level >= 1,
+		"rolled_weapon rolls a leveled item of the given kind")
+
 
 func _test_inventory_grid(t: TestContext) -> void:
 	t.suite = "InventoryGrid"
@@ -90,5 +106,8 @@ func _test_inventory(t: TestContext) -> void:
 	t.ok(inv.drop(inv.stash, left, Vector2i(0, 0)), "the pistol drops into the stash")
 	t.ok(inv.equipped_pistols().size() == 1, "a stashed pistol is still unequipped")
 	t.ok(changes[0] == 2, "drop emits changed")
+
+	t.ok(inv.equipped_guns().size() == inv.equipped_pistols().size(),
+		"equipped_guns() returns the equipped weapons (alias parity)")
 
 	inv.free()

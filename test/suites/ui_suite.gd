@@ -6,7 +6,7 @@ const TestContext := preload("res://test/test_context.gd")
 const ItemTooltipScript := preload("res://src/ui/item_tooltip.gd")
 const GridViewScript := preload("res://src/ui/grid_view.gd")
 const StatusIconScript := preload("res://src/ui/status_icon.gd")
-const LevelUpMenuScript := preload("res://src/ui/level_up_menu.gd")
+const WaveMenuScript := preload("res://src/ui/wave_menu.gd")
 const HudScript := preload("res://src/ui/hud.gd")
 const InventoryItemScript := preload("res://src/inventory/inventory_item.gd")
 const InventoryScript := preload("res://src/inventory/inventory.gd")
@@ -18,13 +18,22 @@ const WeaponRingScript := preload("res://src/weapons/weapon_ring.gd")
 func run(t: TestContext) -> void:
 	_test_item_tooltip(t)
 	_test_grid_view(t)
-	await _test_level_up_menu(t)
+	_test_grid_view_colors(t)
+	await _test_wave_menu(t)
 	await _test_hud_clear_medals(t)
 	await _test_hud_xp_animation(t)
 	await _test_status_icon(t)
 	await _test_reload_debuff(t)
 	await _test_shop_offers(t)
 	await _test_sell_item(t)
+
+
+func _test_grid_view_colors(t: TestContext) -> void:
+	t.suite = "GridView.colors"
+	var pistol := InventoryItemScript.pistol()
+	var sawed_off := InventoryItemScript.for_kind(InventoryItemScript.Kind.SAWED_OFF)
+	t.ok(GridViewScript.color_for(pistol) != GridViewScript.color_for(sawed_off),
+		"placeholder colours come from each weapon's catalog def")
 
 
 func _test_item_tooltip(t: TestContext) -> void:
@@ -82,12 +91,12 @@ func _test_grid_view(t: TestContext) -> void:
 		"the backing uses the existing assigned Rare colour")
 
 
-func _test_level_up_menu(t: TestContext) -> void:
-	t.suite = "LevelUpMenu"
+func _test_wave_menu(t: TestContext) -> void:
+	t.suite = "WaveMenu"
 	var inv: Node = InventoryScript.build()
 	var st: Node = PlayerStatsScript.new()
 	st.souls = 5
-	var menu: CanvasLayer = LevelUpMenuScript.new()
+	var menu: CanvasLayer = WaveMenuScript.new()
 	menu.inventory = inv
 	menu.stats = st
 	t.root().add_child(menu)
@@ -226,12 +235,12 @@ func _test_reload_debuff(t: TestContext) -> void:
 
 
 func _test_shop_offers(t: TestContext) -> void:
-	t.suite = "LevelUpMenu.shop"
+	t.suite = "WaveMenu.shop"
 	var inv: Node = InventoryScript.build()
 	var st: Node = PlayerStatsScript.new()
 	st.souls = 1000                               # plenty to buy
 	st.level = 10                                 # allow higher-level rolls
-	var menu: CanvasLayer = LevelUpMenuScript.new()
+	var menu: CanvasLayer = WaveMenuScript.new()
 	menu.inventory = inv
 	menu.stats = st
 	menu._rng.seed = 42                           # deterministic offers
@@ -263,11 +272,11 @@ func _test_shop_offers(t: TestContext) -> void:
 
 
 func _test_sell_item(t: TestContext) -> void:
-	t.suite = "LevelUpMenu.sell"
+	t.suite = "WaveMenu.sell"
 	var inv: Node = InventoryScript.build()
 	var st: Node = PlayerStatsScript.new()
 	st.souls = 0
-	var menu: CanvasLayer = LevelUpMenuScript.new()
+	var menu: CanvasLayer = WaveMenuScript.new()
 	menu.inventory = inv
 	menu.stats = st
 	t.root().add_child(menu)

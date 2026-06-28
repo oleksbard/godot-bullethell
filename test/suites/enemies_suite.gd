@@ -24,6 +24,7 @@ func run(t: TestContext) -> void:
 	await _test_imp_separation(t)
 	await _test_portal_fail(t)
 	await _test_wave_progression(t)
+	await _test_wave_curve(t)
 	await _test_wave_signals(t)
 	await _test_wave_power_scaling(t)
 
@@ -37,7 +38,7 @@ func _test_wave_spawner(t: TestContext) -> void:
 	t.pump_spawn(sp, 15)
 
 	var imps := t.nodes_in_group("imps")
-	t.ok(imps.size() == 15, "wave 1 drips in to 15 imps (got %d)" % imps.size())
+	t.ok(imps.size() == 15, "the wave drips imps in one at a time (sampled 15, got %d)" % imps.size())
 
 	var all_inside := true
 	for imp in imps:
@@ -108,14 +109,16 @@ func _test_imp_xp_drop(t: TestContext) -> void:
 	t.root().add_child(holder)
 	var imp: Node3D = ImpScript.new()
 	imp.xp_value = 9.0
+	imp.soul_value = 3
 	holder.add_child(imp)
 	await t.frame()
-	var got := [Vector3.ZERO, -1.0]                  # [pos, xp]
-	imp.died.connect(func(pos: Vector3, xp: float) -> void: got[0] = pos; got[1] = xp)
+	var got := [Vector3.ZERO, -1.0, -1]              # [pos, xp, souls]
+	imp.died.connect(func(pos: Vector3, xp: float, souls: int) -> void: got[0] = pos; got[1] = xp; got[2] = souls)
 	imp.global_position = Vector3(3.0, 0.0, 1.0)
 	imp.die()
 	t.ok(is_equal_approx(got[1], 9.0), "imp emits its xp_value on death (%.1f)" % got[1])
 	t.ok(got[0].is_equal_approx(Vector3(3.0, 0.0, 1.0)), "imp emits its death position")
+	t.ok(got[2] == 3, "imp emits its soul_value on death (%d)" % got[2])
 	await t.frame()                              # let the queued free run
 	holder.free()
 
@@ -244,18 +247,60 @@ func _test_wave_progression(t: TestContext) -> void:
 	holder.add_child(sp.player)
 	holder.add_child(sp)                      # _ready -> starts dripping in wave 1
 
-	t.pump_spawn(sp, 15)
-	t.ok(t.nodes_in_group("imps").size() == 15, "wave 1 drips in to 15 imps (got %d)" % t.nodes_in_group("imps").size())
+	t.pump_spawn(sp, 32)
+	t.ok(t.nodes_in_group("imps").size() == 32, "wave 1 drips in to 32 imps (got %d)" % t.nodes_in_group("imps").size())
 	var w1_interval: float = sp._spawn_interval
 
 	for imp in t.nodes_in_group("imps"):
 		imp.die()                             # clear the field; die() leaves the group at once
-	sp._process(0.1)                          # notices the wave is clear -> starts the gap
-	sp._process(WaveSpawnerScript.WAVE_DELAY + 0.1) # gap elapses -> next wave begins
-	t.pump_spawn(sp, 30)
-	t.ok(t.nodes_in_group("imps").size() == 30, "next wave doubles to 30 (got %d)" % t.nodes_in_group("imps").size())
+	sp._process(0.1)                          # notices the clear -> emits wave_cleared, then idles
+	t.ok(sp._awaiting_next, "a cleared wave idles for the menu flow (no free-running timer)")
+	sp.resume_after_menu()                    # Main calls this when the wave menu closes
+	sp._process(WaveSpawnerScript.WAVE_DELAY + 0.1) # breather elapses -> next wave begins
+	t.pump_spawn(sp, 38)
+	t.ok(t.nodes_in_group("imps").size() == 38, "next wave grows to 38 imps (+6 linear) (got %d)" % t.nodes_in_group("imps").size())
 	t.ok(sp._spawn_interval < w1_interval,
 		"wave 2 drips faster than wave 1 (%.2f < %.2f s)" % [sp._spawn_interval, w1_interval])
+
+	await t.frame()
+	holder.free()
+
+
+## Drives _start_wave() directly (no real spawning) to check the count curve, the horde
+## multiplier, and the elite-wave champion buff.
+func _test_wave_curve(t: TestContext) -> void:
+	t.suite = "WaveSpawner.curve"
+	var holder := Node3D.new()
+	t.root().add_child(holder)
+	var sp: Node3D = WaveSpawnerScript.new()
+	sp.player = Node3D.new()
+	holder.add_child(sp.player)
+	holder.add_child(sp)                      # _ready -> wave 1
+
+	t.ok(sp._to_spawn == 32, "wave 1 baseline is 32 (got %d)" % sp._to_spawn)
+	sp._start_wave()                          # wave 2
+	t.ok(sp._to_spawn == 38, "wave 2 climbs by +6 to 38 (got %d)" % sp._to_spawn)
+
+	for _i in 3:
+		sp._start_wave()                      # waves 3, 4, 5
+	t.ok(sp._to_spawn == 84, "wave 5 horde = 56 x1.5 = 84 (got %d)" % sp._to_spawn)
+	t.ok(sp._champions_left == 0, "a plain horde wave seeds no champions")
+
+	for _i in 5:
+		sp._start_wave()                      # waves 6..10
+	t.ok(sp._to_spawn == 129, "wave 10 elite-horde count = 86 x1.5 = 129 (got %d)" % sp._to_spawn)
+	t.ok(sp._champions_left == 1, "wave 10 seeds 1 champion (got %d)" % sp._champions_left)
+
+	sp._process(0.2)                          # portal in the wave's first imp -> a champion
+	var imps := t.nodes_in_group("imps")
+	var first: Node = imps[0] if imps.size() > 0 else null
+	var champ_hp := (ImpScript.BASE_HP + 9.0 * WaveSpawnerScript.HP_PER_WAVE) * WaveSpawnerScript.CHAMP_HP_MULT
+	t.ok(first != null and is_equal_approx(first.body_scale, WaveSpawnerScript.CHAMP_SIZE_MULT),
+		"the elite wave's first imp is an oversized champion")
+	t.ok(first != null and is_equal_approx(first.max_hp, champ_hp),
+		"the champion is x4 HP (%.0f, want %.0f)" % [first.max_hp if first != null else 0.0, champ_hp])
+	t.ok(first != null and first.soul_value >= 1 + WaveSpawnerScript.CHAMP_BONUS_SOULS,
+		"the champion drops a soul jackpot (souls %d)" % (first.soul_value if first != null else 0))
 
 	await t.frame()
 	holder.free()
@@ -280,11 +325,11 @@ func _test_wave_signals(t: TestContext) -> void:
 			first_xp[0] = imp.xp_value)
 	sp.wave_cleared.connect(func() -> void: cleared[0] += 1)
 
-	holder.add_child(sp)                              # _ready -> _start_wave(15) -> wave_started(1)
+	holder.add_child(sp)                              # _ready -> _start_wave() -> wave_started(1)
 	t.ok(started[0] == 1, "wave_started fires with wave 1 on ready (got %d)" % started[0])
 
-	t.pump_spawn(sp, 15)
-	t.ok(spawned[0] == 15, "imp_spawned fires once per spawned imp (got %d)" % spawned[0])
+	t.pump_spawn(sp, 32)
+	t.ok(spawned[0] == 32, "imp_spawned fires once per spawned imp (got %d)" % spawned[0])
 	t.ok(is_equal_approx(first_xp[0], ImpScript.BASE_XP),
 		"a wave-1 imp carries BASE_XP (%.1f)" % first_xp[0])
 

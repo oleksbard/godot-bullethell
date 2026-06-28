@@ -2,7 +2,7 @@ class_name InventoryGrid
 extends RefCounted
 ## One inventory grid: a mask of valid cells plus which item occupies each cell.
 ## Placement is validated against the mask (holes/edges) and current occupancy.
-## Pure logic — the LevelUpMenu renders it; nothing here touches the scene tree.
+## Pure logic — the WaveMenu renders it; nothing here touches the scene tree.
 
 const Self := preload("res://src/inventory/inventory_grid.gd")   # cold-load safe self-ref
 const InventoryItemScript := preload("res://src/inventory/inventory_item.gd")

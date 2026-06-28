@@ -7,8 +7,9 @@ extends Node3D
 ## a projectile.
 
 const MeshFactory := preload("res://src/lib/mesh_factory.gd")
+const WeaponDefScript := preload("res://src/weapons/weapon_def.gd")
 
-signal fired(origin: Vector3, target: Node3D, damage: float)
+signal fired(origin: Vector3, target: Node3D, damage: float, aim_dir: Vector3)
 
 const TURN_SPEED := 18.0
 const FIRE_INTERVAL := 1.7
@@ -35,6 +36,7 @@ var damage := DAMAGE
 var fire_interval := FIRE_INTERVAL
 var mag_size := MAG_SIZE
 var reload_time := RELOAD_TIME
+var def: WeaponDefScript = null     # set by the WeaponRing; null -> procedural pistol, SINGLE
 
 static var _shared_flash_tex: Texture2D   # soft round flash sprite, shared by all guns
 
@@ -106,10 +108,42 @@ func _fire() -> void:
 	_flash.light_energy = FLASH_ENERGY
 	_flash_quad.scale = Vector3.ONE * randf_range(0.85, 1.3)   # vary so shots don't look identical
 	_flash_quad.visible = true
-	fired.emit(to_global(BARREL_TIP), _target, damage)
+	var tip: Vector3 = def.barrel_tip if def != null else BARREL_TIP
+	var origin := to_global(tip)
+	var pattern: int = def.pattern if def != null else WeaponDefScript.Pattern.SINGLE
+	if pattern == WeaponDefScript.Pattern.SPREAD and is_instance_valid(_target):
+		var base := _target.global_position - origin
+		base.y = 0.0
+		for d in spread_aim(base, def.pellets, def.spread_arc):
+			fired.emit(origin, _target, damage, d)
+	else:
+		# SINGLE — and BEAM falls back to one bolt (ponytail: hitscan not built until a
+		# beam weapon exists).
+		fired.emit(origin, _target, damage, Vector3.ZERO)
 	_ammo -= 1
 	if _ammo <= 0:
 		_start_reload()
+
+
+## `pellets` headings scattered RANDOMLY across `arc` (radians) about `base_dir`,
+## rotated about Y — a real buckshot pattern, not an even fan. Each pellet's angle is
+## drawn from a centre-biased distribution (avg of two uniforms) so the cloud clusters
+## toward the aim and thins at the edges. 1 pellet -> straight ahead.
+static func spread_aim(base_dir: Vector3, pellets: int, arc: float) -> Array:
+	var out: Array = []
+	var b := base_dir
+	b.y = 0.0
+	if b.length() < 0.001:
+		b = Vector3(0, 0, -1)
+	b = b.normalized()
+	if pellets <= 1:
+		out.append(b)
+		return out
+	var half := arc * 0.5
+	for i in pellets:
+		var off := (randf_range(-half, half) + randf_range(-half, half)) * 0.5   # triangular: centre-weighted
+		out.append(b.rotated(Vector3.UP, off))
+	return out
 
 
 ## Empty magazine -> begin a reload: switch the body material to alpha so the red
@@ -159,14 +193,32 @@ func reload_fraction() -> float:
 
 
 func _build_body() -> void:
-	# A small pistol: a low slide, a stubby barrel out the -Z front, and a raked
-	# grip below. Roughly hand-sized so it sits naturally in the marine's grip.
+	var tip: Vector3 = def.barrel_tip if def != null else BARREL_TIP
+	if def != null and def.model_scene != null:
+		add_child(def.model_scene.instantiate())   # imported model supplies its own look
+	elif def != null and def.body == WeaponDefScript.Body.SAWED_OFF:
+		_build_sawed_off()
+	else:
+		_build_pistol()
+	_build_flash(tip)
+
+
+## One shared gunmetal material for every part of a procedural body. Stored in
+## `_body_mat` so the reload animation can tint the whole gun red and fill its alpha.
+func _gun_material() -> StandardMaterial3D:
 	var mat := StandardMaterial3D.new()
 	mat.albedo_color = BODY_COLOR
 	mat.metallic = 0.5
-	_body_mat = mat              # kept so reload can tint it red + animate its alpha
 	mat.roughness = 0.45
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_body_mat = mat
+	return mat
+
+
+## A small pistol: a low slide, a stubby barrel out the -Z front, and a raked grip
+## below. Roughly hand-sized so it sits naturally in the marine's grip.
+func _build_pistol() -> void:
+	var mat := _gun_material()
 
 	var slide := MeshInstance3D.new()
 	slide.mesh = MeshFactory.beveled_box(Vector3(0.1, 0.12, 0.36), 0.03)
@@ -186,15 +238,44 @@ func _build_body() -> void:
 	grip.rotation.x = deg_to_rad(16.0)            # raked back like a real grip
 	add_child(grip)
 
+
+## A sawed-off double-barrel: a chunky receiver, two short side-by-side barrels out the
+## -Z front, and a cut-down pistol grip below. Same grip-at-origin / barrel-down-(-Z)
+## layout as the pistol, so the hand mount and the muzzle (def.barrel_tip) stay aligned.
+func _build_sawed_off() -> void:
+	var mat := _gun_material()
+
+	var receiver := MeshInstance3D.new()
+	receiver.mesh = MeshFactory.beveled_box(Vector3(0.15, 0.15, 0.2), 0.03)
+	receiver.material_override = mat
+	add_child(receiver)
+
+	for side in [-1.0, 1.0]:                       # twin stubby barrels, side by side
+		var barrel := MeshInstance3D.new()
+		barrel.mesh = MeshFactory.beveled_box(Vector3(0.06, 0.06, 0.24), 0.02)
+		barrel.material_override = mat
+		barrel.position = Vector3(0.04 * side, 0.02, -0.18)
+		add_child(barrel)
+
+	var grip := MeshInstance3D.new()
+	grip.mesh = MeshFactory.beveled_box(Vector3(0.085, 0.2, 0.11), 0.025)
+	grip.material_override = mat
+	grip.position = Vector3(0.0, -0.15, 0.1)       # cut-down pistol grip, same seat as the pistol
+	grip.rotation.x = deg_to_rad(16.0)
+	add_child(grip)
+
+
+## The muzzle flash at the barrel `tip`: a warm point light + an additive billboard
+## sprite, popped on each shot and faded out in _process. Built for both the
+## procedural pistol and any def-supplied model.
+func _build_flash(tip: Vector3) -> void:
 	_flash = OmniLight3D.new()
 	_flash.light_color = Color(1.0, 0.85, 0.55)   # warm gunfire light
 	_flash.light_energy = 0.0
 	_flash.omni_range = 3.5
-	_flash.position = BARREL_TIP
+	_flash.position = tip
 	add_child(_flash)
 
-	# Visible muzzle-flash sprite: a soft round additive billboard at the barrel
-	# tip, popped on each shot and faded out with the flash light (see _process).
 	_flash_mat = StandardMaterial3D.new()
 	_flash_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	_flash_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
@@ -209,7 +290,7 @@ func _build_body() -> void:
 	qm.size = Vector2(FLASH_SIZE, FLASH_SIZE)
 	_flash_quad.mesh = qm
 	_flash_quad.material_override = _flash_mat
-	_flash_quad.position = BARREL_TIP
+	_flash_quad.position = tip
 	_flash_quad.visible = false
 	add_child(_flash_quad)
 

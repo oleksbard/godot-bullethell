@@ -1,15 +1,18 @@
-class_name LevelUpMenu
+class_name WaveMenu
 extends CanvasLayer
-## Pause overlay shown on level-up. The player manages the grid inventory: left-click
-## an item to pick it up (which removes it from its grid — so a pistol pulled out of
-## the backpack is unequipped), SPACE rotates the held item, left-click a cell drops it
-## where it fits. A stubbed 4-slot UPGRADES strip sits top-left (no picking yet).
-## CONTINUE returns any held item, clears the HUD level-up medal, and unpauses.
+## Pause overlay shown between waves (opened once the cleared wave's souls have flown in —
+## XpOrbField.drained). The player manages the grid inventory: left-click an item to pick it
+## up (which removes it from its grid — so a pistol pulled out of the backpack is unequipped),
+## SPACE rotates the held item, left-click a cell drops it where it fits. A 4-slot SHOP sits
+## top-left. CONTINUE returns any held item, clears the HUD level-up medal, emits `closed`
+## (Main resumes the spawner), and unpauses.
 ## Runs while the tree is paused (PROCESS_MODE_ALWAYS), like pause_menu.gd.
 ##
 ## Layout is a centered container that scales to ~TARGET_COVERAGE of the viewport:
 ## every size (grid cell, fonts, spacing) is set natively at base × k, so it stays
 ## crisp at any scale (no transform/bitmap upscaling) and hit-testing uses real sizes.
+
+signal closed()                  # CONTINUE pressed -> Main tells the spawner to resume
 
 const GridViewScript := preload("res://src/ui/grid_view.gd")
 const ItemTooltipScript := preload("res://src/ui/item_tooltip.gd")
@@ -17,6 +20,7 @@ const DragGhostScript := preload("res://src/ui/drag_ghost.gd")
 const UiFxScript := preload("res://src/ui/ui_fx.gd")
 const InventorySfxScript := preload("res://src/audio/inventory_sfx.gd")
 const InventoryItemScript := preload("res://src/inventory/inventory_item.gd")
+const WeaponCatalogScript := preload("res://src/weapons/weapon_catalog.gd")
 
 const DIM := Color(0.02, 0.0, 0.0, 1.0)   # solid near-black: a clean modal backdrop (also hides the frozen HUD banner behind it)
 const EMBER := Color(1.0, 0.45, 0.2)
@@ -97,9 +101,10 @@ func _ready() -> void:
 	_build()
 
 
-## Pause + show. Idempotent: a second level-up while open is ignored. Rescales to the
-## current viewport so it always covers ~TARGET_COVERAGE, centred.
-func open(_level: int = 0) -> void:
+## Pause + show. Idempotent: a re-open while already open is ignored. Rescales to the
+## current viewport so it always covers ~TARGET_COVERAGE, centred. (arg-less so it can
+## bind straight to WaveSpawner.wave_cleared.)
+func open(_wave: int = 0) -> void:
 	if _open:
 		return
 	_open = true
@@ -125,6 +130,7 @@ func close() -> void:
 	get_tree().paused = false
 	if hud != null and hud.has_method("clear_levelup_medals"):
 		hud.clear_levelup_medals()
+	closed.emit()                    # Main -> spawner.resume_after_menu (breather, then next wave)
 
 
 # --- building ---------------------------------------------------------------
@@ -148,7 +154,7 @@ func _build() -> void:
 	center.add_child(_content)
 
 	_title = Label.new()
-	_title.text = "LEVEL UP"
+	_title.text = "WAVE CLEARED"
 	_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_title.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	_title.add_theme_color_override("font_color", EMBER)
@@ -460,8 +466,10 @@ func _roll_offers() -> void:
 	_offers.clear()
 	var player_level: int = stats.level if stats != null else 1
 	var rb: float = stats.rarity_bonus if stats != null else 0.0
+	var kinds: Array = WeaponCatalogScript.weapon_kinds()
 	for i in SHOP_SLOTS:
-		var item := InventoryItemScript.rolled_pistol(player_level, rb, _rng)
+		var kind: int = kinds[_rng.randi_range(0, kinds.size() - 1)]
+		var item := InventoryItemScript.rolled_weapon(kind, player_level, rb, _rng)
 		_offers.append({"item": item, "price": item.buy_price(), "sold": false})
 		_refresh_offer(i)
 

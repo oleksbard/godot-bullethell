@@ -21,7 +21,7 @@ const XpOrbFieldScript := preload("res://src/loot/xp_orb_field.gd")
 const HealthVialFieldScript := preload("res://src/loot/health_vial_field.gd")
 const ScreenGradeScript := preload("res://src/fx/screen_grade.gd")
 const InventoryScript := preload("res://src/inventory/inventory.gd")
-const LevelUpMenuScript := preload("res://src/ui/level_up_menu.gd")
+const WaveMenuScript := preload("res://src/ui/wave_menu.gd")
 const ObstacleFieldScript := preload("res://src/world/obstacle_field.gd")
 
 const CAM_OFFSET := Vector3(0.0, 13.0, 7.0)
@@ -79,13 +79,12 @@ func _ready() -> void:
 	hud.stats = stats
 	add_child(hud)
 
-	# Level-up menu — pauses on level-up; lets the player manage the inventory.
-	var levelup := LevelUpMenuScript.new()
-	levelup.inventory = inventory
-	levelup.hud = hud
-	levelup.stats = stats
-	add_child(levelup)
-	hud.level_reached.connect(levelup.open)   # open on a FULL bar, not the instant XP crosses the threshold
+	# Wave menu — pauses between waves; lets the player shop + manage the inventory.
+	var wave_menu := WaveMenuScript.new()
+	wave_menu.inventory = inventory
+	wave_menu.hud = hud
+	wave_menu.stats = stats
+	add_child(wave_menu)
 
 	# Wave spawner — announces imp spawns + wave boundaries; we wire them to loot + HUD here.
 	var spawner := WaveSpawnerScript.new()
@@ -93,7 +92,9 @@ func _ready() -> void:
 	spawner.inventory = inventory   # read equipped loadout power to scale each wave
 	spawner.obstacles = obstacles   # handed to each imp so columns/lava block it too
 	spawner.imp_spawned.connect(loot.on_imp_spawned)
-	spawner.wave_cleared.connect(loot.vacuum_all)
+	spawner.wave_cleared.connect(loot.vacuum_all)         # clear -> vacuum leftover souls to the marine
+	loot.drained.connect(wave_menu.open)                  # ...then open the menu once they've all flown in
+	wave_menu.closed.connect(spawner.resume_after_menu)   # CONTINUE -> breather -> next wave
 	spawner.wave_started.connect(hud.on_wave_started)
 	add_child(spawner)
 

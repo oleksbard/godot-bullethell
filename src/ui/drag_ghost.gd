@@ -3,7 +3,7 @@ extends Control
 ## The item being dragged, drawn following the cursor: a fit tint (green where it
 ## would drop, red where it won't) behind the item's icon — rotated to its current
 ## `rot` via GridView's shared draw — or coloured cells when the item has no art.
-## Pure view: the LevelUpMenu sets the item, fit flag, and screen position.
+## Pure view: the WaveMenu sets the item, fit flag, and screen position.
 
 const GridViewScript := preload("res://src/ui/grid_view.gd")
 
