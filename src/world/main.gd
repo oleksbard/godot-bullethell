@@ -70,6 +70,7 @@ func _ready() -> void:
 	# XP orbs dropped by dead imps, magnetised to the marine.
 	var loot := XpOrbFieldScript.new()
 	loot.player = marine
+	loot.stats = stats               # drains the soul vault for bonus drops; banks uncollected motes
 	add_child(loot)
 
 	# Health vials dropped onto the island over time — capped, hurt-only; off-screen ones
@@ -99,8 +100,8 @@ func _ready() -> void:
 	spawner.inventory = inventory   # read equipped loadout power to scale each wave
 	spawner.obstacles = obstacles   # handed to each imp so columns/lava block it too
 	spawner.imp_spawned.connect(loot.on_imp_spawned)
-	spawner.wave_cleared.connect(loot.vacuum_all)         # clear -> vacuum leftover souls to the marine
-	loot.drained.connect(wave_menu.open)                  # ...then open the menu once they've all flown in
+	spawner.wave_cleared.connect(loot.bank_leftovers)     # clear -> uncollected souls go to the vault
+	loot.drained.connect(wave_menu.open)                  # ...then open the menu once they've drifted off
 	wave_menu.closed.connect(spawner.resume_after_menu)   # CONTINUE -> breather -> next wave
 	spawner.wave_started.connect(hud.on_wave_started)
 	spawner.wave_started.connect(func(w: int) -> void: wave_menu.current_wave = w)   # gates artifact tiers

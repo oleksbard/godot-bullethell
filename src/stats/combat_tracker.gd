@@ -54,7 +54,7 @@ func record_hit(gun: Object, amount: float, killed: bool) -> void:
 
 
 ## Tally a kill by enemy type and the souls it dropped (timing-independent: driven by
-## the imp's death, not by when souls are vacuumed).
+## the imp's death, not by when the souls are collected).
 func record_kill_by_type(type: String, souls: int) -> void:
 	_kills_by_type[type] = int(_kills_by_type.get(type, 0)) + 1
 	_souls += souls

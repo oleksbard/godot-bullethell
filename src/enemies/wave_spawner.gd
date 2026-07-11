@@ -10,9 +10,12 @@ extends Node3D
 
 signal imp_spawned(imp: Node)    # each portalled-in imp (Main binds it to the XP-orb field)
 signal wave_started(wave: int)   # a new wave began (Main resets the HUD level-up stack)
-signal wave_cleared()            # drip done & 0 imps left (Main vacuums leftover XP orbs)
+signal wave_cleared()            # drip done & 0 imps left (Main banks uncollected souls to the vault)
 
 const ImpScript := preload("res://src/enemies/imp.gd")
+const ZombieScript := preload("res://src/enemies/zombie.gd")
+const LeapCoordinatorScript := preload("res://src/enemies/leap_coordinator.gd")
+const BuffCoordinatorScript := preload("res://src/enemies/buff_coordinator.gd")
 const PortalScript := preload("res://src/fx/portal.gd")
 const IslandShape := preload("res://src/lib/island_shape.gd")
 const ObstacleFieldScript := preload("res://src/world/obstacle_field.gd")
@@ -20,8 +23,8 @@ const ObstacleFieldScript := preload("res://src/world/obstacle_field.gd")
 const WAVE_1_COUNT := 32
 const COUNT_STEP := 6            # imps added per wave (linear), so the count climbs gently, not ×2
 const COUNT_CAP := 90            # baseline-count plateau so the field never floods (power + horde stack on top)
-const HP_PER_WAVE := 3.0         # imp HP added per wave (pistol dmg 5: w1=1 shot, w2-3=2 shots, w4-5=3...)
-const ATTACK_DMG_PER_WAVE := 1.0 # imp melee damage added per wave (wave 1 = 1, wave 2 = 2, ...)
+const HP_PER_WAVE := 2.0         # imp HP added per wave (pistol dmg 5; gentler slope so kills don't lag the player)
+const ATTACK_DMG_PER_WAVE := 0.5 # imp melee damage added per wave (w1=1, w5=3, w10=5.5 — survivable vs the fixed 60 HP marine)
 const XP_PER_WAVE := 1.0         # imp XP value added per wave (tougher imps worth more)
 const WAVE_DELAY := 1.5          # brief breather after the wave menu closes before the next wave drips in
 
@@ -45,6 +48,15 @@ const SPAWN_MARGIN := 2.0        # keep spawns inside the coast
 const MIN_FROM_CENTER := 6.0     # don't spawn on top of the player (spawns at centre)
 const EMERGE_TIME := 1.0         # seconds an imp stays frozen in its portal
 
+# Zombie mix: a zombie costs ZOMBIE_COST of the wave's point budget (an imp costs 1).
+# They appear from wave 2; the eligible share climbs with the wave and is capped so the
+# imp horde never fully gives way.
+const ZOMBIE_COST := 2
+const ZOMBIE_START_WAVE := 2
+const ZOMBIE_SHARE_PER_WAVE := 0.06
+const ZOMBIE_SHARE_CAP := 0.4
+const ZOMBIE_SOUL_BASE := 2          # a zombie drops ~2x an imp's souls (1) before the wave bonus
+
 const SPAWN_INTERVAL_1 := 0.6    # seconds between spawns in wave 1
 const SPAWN_SPEEDUP := 0.8       # interval ×= this each wave -> later waves spawn faster
 const SPAWN_INTERVAL_MIN := 0.1  # floor so high waves don't all pop at once
@@ -55,10 +67,9 @@ const SPAWN_INTERVAL_MIN := 0.1  # floor so high waves don't all pop at once
 const POWER_BASELINE := 20.0     # two starting level-1 pistols -> factor 1.0 (no change)
 const POWER_FACTOR_CAP := 6.0    # clamp so a runaway loadout can't make waves explode
 const COUNT_POWER_WEIGHT := 0.6  # how much power inflates the imp count (0 = none, 1 = full factor)
-const STAT_POWER_WEIGHT := 0.5   # how much power inflates per-imp HP + damage
-# Types (hook, not built this PR — only one imp model exists): once variants land,
-# gate them by factor — e.g. factor > 1.4 -> some "brute" imps (×2 HP/size),
-# factor > 2.0 -> fast imps. See _variant_for().
+const STAT_POWER_WEIGHT := 0.25  # how much power inflates per-imp HP + damage (×1.0..×2.25; was 0.5/×3.5 — the player upgrading shouldn't also super-charge imp stats)
+# Types: once more variants land, gate them by factor — e.g. factor > 1.4 -> chance of
+# a brute imp (×2 HP/size), factor > 2.0 -> chance of a fast imp.
 
 var player: Node3D
 var inventory: Node              # Inventory (set by Main); read for loadout power. null -> factor 1.0
@@ -77,6 +88,13 @@ var _awaiting_next := false      # wave cleared; idle until the wave menu closes
 
 func _ready() -> void:
 	_rng.seed = 1337
+	# Leap special: one coordinator grants enemy pounces one-at-a-time (global cooldown).
+	# It finds enemies by group, so it just needs the player; no per-enemy wiring.
+	var leaper := LeapCoordinatorScript.new()
+	leaper.player = player
+	add_child(leaper)
+	# Buff special: one coordinator grants the zombie AoE-haste channel one-at-a-time.
+	add_child(BuffCoordinatorScript.new())
 	_start_wave()
 
 
@@ -93,12 +111,11 @@ func _process(delta: float) -> void:
 			_start_wave()
 		return
 
-	# Drip the wave in one imp at a time on the wave's interval.
+	# Drip the wave in one enemy at a time on the wave's interval (each spends its points).
 	if _to_spawn > 0:
 		_spawn_timer -= delta
 		if _spawn_timer <= 0.0:
 			_spawn_one()
-			_to_spawn -= 1
 			_spawn_timer = _spawn_interval
 		return
 
@@ -121,6 +138,7 @@ func resume_after_menu() -> void:
 ## and the loadout power factor inflates the count further.
 func _start_wave() -> void:
 	_wave += 1
+	_between = false             # cancel any inter-wave breather (direct call or on-timer)
 	_power_factor = _read_power_factor()
 	var base := mini(COUNT_CAP, WAVE_1_COUNT + COUNT_STEP * (_wave - 1))
 	var pace := 1.0
@@ -153,11 +171,12 @@ func _roll_soul_bonus() -> int:
 	return bonus
 
 
-## Forward hook for enemy variants (only one imp type exists today, so this is a no-op).
-## Once variants land, pick a type from `pf`: e.g. pf > 1.4 -> chance of a brute,
-## pf > 2.0 -> chance of a fast imp.
-func _variant_for(_pf: float) -> void:
-	pass
+## The fraction of a wave's spawn budget eligible to become zombies. Zero before
+## ZOMBIE_START_WAVE; climbs with the wave; capped so imps always swarm. Pure (testable).
+func _zombie_share(wave: int) -> float:
+	if wave < ZOMBIE_START_WAVE:
+		return 0.0
+	return clampf(float(wave - 1) * ZOMBIE_SHARE_PER_WAVE, 0.0, ZOMBIE_SHARE_CAP)
 
 
 ## Count of live imps still in the wave.
@@ -169,34 +188,60 @@ func _alive() -> int:
 	return n
 
 
-## Portal in one imp: spawn the imp frozen-and-materializing, plus the portal FX.
+## Portal in one enemy: pick imp vs zombie, spawn it frozen-and-materializing with the
+## portal FX, and spend its point cost. Champions (elite waves) are always imps and come
+## first (while _champions_left > 0), so they spawn before any zombie roll.
 func _spawn_one() -> void:
 	var pt := _scatter_point()
-	var imp := ImpScript.new()
-	imp.player = player
-	imp.obstacles = obstacles
-	var stat_mult := lerpf(1.0, _power_factor, STAT_POWER_WEIGHT)   # power makes imps tougher
-	imp.max_hp = (ImpScript.BASE_HP + float(_wave - 1) * HP_PER_WAVE) * stat_mult
-	imp.hp = imp.max_hp
-	imp.attack_damage = (ImpScript.BASE_ATTACK_DAMAGE + float(_wave - 1) * ATTACK_DMG_PER_WAVE) * stat_mult
-	imp.xp_value = ImpScript.BASE_XP + float(_wave - 1) * XP_PER_WAVE   # reward tracks wave, not loadout
-	imp.soul_value = 1 + _roll_soul_bonus()                  # deeper waves -> better odds of extra souls
-	if _champions_left > 0:                                  # elite-wave mini-boss: tankier, bigger, richer
+	var is_champion := _champions_left > 0
+	var make_zombie := (not is_champion) and _to_spawn >= ZOMBIE_COST and _rng.randf() < _zombie_share(_wave)
+
+	var enemy: Node3D
+	var base_hp: float
+	var base_atk: float
+	var base_xp: float
+	var soul_base: int
+	var cost: int
+	if make_zombie:
+		enemy = ZombieScript.new()
+		base_hp = ZombieScript.BASE_HP
+		base_atk = ZombieScript.BASE_ATTACK_DAMAGE
+		base_xp = ZombieScript.BASE_XP
+		soul_base = ZOMBIE_SOUL_BASE
+		cost = ZOMBIE_COST
+	else:
+		enemy = ImpScript.new()
+		base_hp = ImpScript.BASE_HP
+		base_atk = ImpScript.BASE_ATTACK_DAMAGE
+		base_xp = ImpScript.BASE_XP
+		soul_base = 1
+		cost = 1
+
+	enemy.player = player
+	enemy.obstacles = obstacles
+	var stat_mult := lerpf(1.0, _power_factor, STAT_POWER_WEIGHT)
+	enemy.max_hp = (base_hp + float(_wave - 1) * HP_PER_WAVE) * stat_mult
+	enemy.hp = enemy.max_hp
+	enemy.attack_damage = (base_atk + float(_wave - 1) * ATTACK_DMG_PER_WAVE) * stat_mult
+	enemy.xp_value = base_xp + float(_wave - 1) * XP_PER_WAVE
+	enemy.soul_value = soul_base + _roll_soul_bonus()
+	if is_champion:                                          # elite-wave mini-boss (imp)
 		_champions_left -= 1
-		imp.max_hp *= CHAMP_HP_MULT
-		imp.hp = imp.max_hp
-		imp.xp_value *= CHAMP_XP_MULT
-		imp.body_scale = CHAMP_SIZE_MULT
-		imp.soul_value += CHAMP_BONUS_SOULS                 # guaranteed jackpot on top of the roll
-	imp.position = pt
-	add_child(imp)
-	imp.emerge(EMERGE_TIME)      # frozen + scaling up while the portal is open
+		enemy.max_hp *= CHAMP_HP_MULT
+		enemy.hp = enemy.max_hp
+		enemy.xp_value *= CHAMP_XP_MULT
+		enemy.body_scale = CHAMP_SIZE_MULT
+		enemy.soul_value += CHAMP_BONUS_SOULS
+	enemy.position = pt
+	add_child(enemy)
+	enemy.emerge(EMERGE_TIME)
 
 	var portal := PortalScript.new()
 	portal.position = pt
-	portal.imp = imp             # if this imp dies before emerging, the portal fails
+	portal.imp = enemy                                       # if it dies before emerging, the portal fails
 	add_child(portal)
-	imp_spawned.emit(imp)
+	_to_spawn -= cost
+	imp_spawned.emit(enemy)
 
 
 ## A random point on the island — inside the coast, away from the centre.

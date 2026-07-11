@@ -18,15 +18,15 @@ const SATURATION := 1.25   # was 1.35; lowered — 1.35 over-pushed the scene's 
 # #1 cel / comic.
 const POSTERIZE_BANDS := 0.0      # luma bands (fewer = chunkier)
 const POSTERIZE_AMOUNT := 0.0     # 0 = off
-const OUTLINE_STRENGTH := 0.7     # ink-edge darkening; 0 = off
-const OUTLINE_THRESHOLD := 0.1   # edge sensitivity (lower = more edges)
+const OUTLINE_STRENGTH := 0.2     # ink-edge darkening; 0 = off
+const OUTLINE_THRESHOLD := 0.05   # edge sensitivity (lower = more edges)
 
 # #1b contrast / #2b cel specular / #3 rim highlight (the "shine" pass).
 const CONTRAST := 0.35         # S-curve punch (darks deeper, brights hotter); 0 = off
 const SPEC_THRESHOLD := 0.8    # luma where the gloss plateau starts
 const SPEC_SOFTNESS := 0.12    # plateau edge softness
 const SPEC_STRENGTH := 0.6     # push the brightest luma toward a hot highlight; 0 = off
-const RIM_STRENGTH := 0.6      # bright ember rim on the lit side of edges; 0 = off
+const RIM_STRENGTH := 0.0      # bright ember rim on the lit side of edges; 0 = off
 const RIM_THRESHOLD := 0.08    # how much brighter the lit side must be to rim
 
 # #2 halftone dots in shadows.

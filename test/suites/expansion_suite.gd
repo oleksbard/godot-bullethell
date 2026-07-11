@@ -19,6 +19,7 @@ func run(t: TestContext) -> void:
 	_test_item(t)
 	_test_grid(t)
 	_test_inventory(t)
+	_test_dup_inflation(t)
 
 
 func _test_item(t: TestContext) -> void:
@@ -90,14 +91,55 @@ func _test_inventory(t: TestContext) -> void:
 	t.ok(inv.expansion_count() == 0, "no expansions owned at start")
 	t.ok(inv.expansion_price(WeaponCatalogScript.EXPAND_2X2) == 55, "the first 2x2 costs its base price")
 
+	# Price tracks field fullness, not the count owned: a stashed expansion (no field
+	# cells unlocked) leaves the price at base.
+	var growth: float = InventoryScript.EXPANSION_PRICE_GROWTH
 	var e_a := InventoryItemScript.for_kind(InventoryItemScript.Kind.EXPAND_1X1)
 	inv.add_to_stash(e_a)
-	var e_b := InventoryItemScript.for_kind(InventoryItemScript.Kind.EXPAND_1X1)
-	inv.add_to_stash(e_b)
-	t.ok(inv.expansion_count() == 2, "two stashed expansions are counted")
-	t.ok(inv.expansion_price(WeaponCatalogScript.EXPAND_2X2) == roundi(55.0 * pow(1.6, 2.0)),
-		"price escalates with the number owned")
+	t.ok(inv.expansion_count() == 1, "a stashed expansion is counted")
+	t.ok(inv.expansion_price(WeaponCatalogScript.EXPAND_2X2) == 55,
+		"a stashed expansion does not raise the price (no field slots unlocked)")
+
+	# Placing a 2x2 unlocks 4 slots -> the next price scales by growth^4.
+	var plate := InventoryItemScript.for_kind(InventoryItemScript.Kind.EXPAND_2X2)
+	var spot := Vector2i(0, 0)
+	for cell in inv.backpack.locked_cells():
+		if inv.backpack.fits(plate, cell):
+			spot = cell
+			break
+	inv.backpack.place(plate, spot)
+	t.ok(inv.expansion_price(WeaponCatalogScript.EXPAND_2X2) == roundi(55.0 * pow(growth, 4.0)),
+		"price escalates with unlocked slots (4 cells -> growth^4)")
+
+	# Reversible: lift the expansion back out and the freed slots drop the price to base.
+	inv.backpack.remove(plate)
+	t.ok(inv.expansion_price(WeaponCatalogScript.EXPAND_2X2) == 55,
+		"removing the expansion drops the price back to base (reversible)")
 	t.ok(inv.equipped_guns().size() == 2, "a stashed expansion is never equipped as a gun")
+	inv.free()
+
+
+func _test_dup_inflation(t: TestContext) -> void:
+	t.suite = "Inventory.dup_price"
+	var inv := InventoryScript.build()   # starts with 2 pistols equipped in the backpack
+	# Guns inflate per-kind, gently. Two pistols already owned -> a 3rd is x(growth^2).
+	var gg: float = InventoryScript.GUN_DUP_GROWTH
+	var pistol := InventoryItemScript.pistol()
+	t.ok(inv.owned_count(InventoryItemScript.Kind.PISTOL) == 2, "the two starting pistols are counted")
+	t.ok(inv.shop_price(pistol) == roundi(float(pistol.buy_price()) * pow(gg, 2.0)),
+		"a 3rd pistol is inflated by the two already owned")
+	var sawed := InventoryItemScript.for_kind(InventoryItemScript.Kind.SAWED_OFF)
+	t.ok(inv.shop_price(sawed) == sawed.buy_price(), "an unowned gun kind sits at its base price")
+
+	# Artifacts inflate per-kind, steeply. First is base; owning one inflates the next.
+	var ag: float = InventoryScript.ARTIFACT_DUP_GROWTH
+	var rune := InventoryItemScript.for_kind(InventoryItemScript.Kind.RUNE_OF_WRATH)
+	t.ok(inv.shop_price(rune) == rune.buy_price(), "the first artifact of a kind is at base price")
+	inv.add_to_stash(InventoryItemScript.for_kind(InventoryItemScript.Kind.RUNE_OF_WRATH))
+	t.ok(inv.shop_price(rune) == roundi(float(rune.buy_price()) * ag),
+		"owning one rune inflates the next by the artifact growth")
+	var coil := InventoryItemScript.for_kind(InventoryItemScript.Kind.HELLFIRE_COIL)
+	t.ok(inv.shop_price(coil) == coil.buy_price(), "a different artifact kind is not inflated")
 	inv.free()
 
 
@@ -107,8 +149,9 @@ func _test_catalog(t: TestContext) -> void:
 	t.ok(not wk.has(WeaponCatalogScript.EXPAND_1X1) and not wk.has(WeaponCatalogScript.EXPAND_2X2),
 		"weapon_kinds() excludes expansions")
 	var ek := WeaponCatalogScript.expansion_kinds()
-	t.ok(ek.size() == 2 and ek.has(WeaponCatalogScript.EXPAND_1X1) and ek.has(WeaponCatalogScript.EXPAND_2X2),
-		"expansion_kinds() returns the two phase-1 expansion kinds")
+	t.ok(ek.size() == 4 and ek.has(WeaponCatalogScript.EXPAND_1X1) and ek.has(WeaponCatalogScript.EXPAND_2X2)
+			and ek.has(WeaponCatalogScript.EXPAND_1X3) and ek.has(WeaponCatalogScript.EXPAND_1X4),
+		"expansion_kinds() returns all four expansion kinds")
 	var d := WeaponCatalogScript.get_def(WeaponCatalogScript.EXPAND_2X2)
 	t.ok(d.item_type == WeaponDefScript.ItemType.EXPANSION, "the 2x2 def is an EXPANSION")
 	t.ok(d.cells.size() == 4 and d.base_price == 55, "the 2x2 def has 4 cells and base price 55")

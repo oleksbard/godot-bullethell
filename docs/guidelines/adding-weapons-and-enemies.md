@@ -2,9 +2,9 @@
 
 A complete catalog of every property a weapon and an enemy carry today, and a
 file-by-file checklist of what to add to register a new one. Reflects the code as
-of 2026-06-27 (only the **Pistol** weapon and the **Imp** enemy exist, so most
-systems are written generically but a handful of spots are still hardcoded to
-those two — flagged as **⚠ hardcoded** below).
+of 2026-06-29 (only the **Pistol** weapon exists; two enemies exist — **Imp** and
+**Zombie** — sharing the `Enemy` base. A handful of weapon spots are still hardcoded
+to Pistol — flagged as **⚠ hardcoded** below).
 
 ---
 
@@ -101,25 +101,37 @@ Adding a **new firing behaviour** (not a bolt — e.g. beam, shotgun spread, hom
 
 ## Part 2 — Enemies
 
-An enemy is **one script** (`imp.gd`) plus shared services. Everything that targets
-or counts enemies keys on the group string **`Imp.GROUP` = `"imps"`** — a new
-enemy must join it (or you must generalize targeting).
+Two enemies exist — **Imp** and **Zombie** — both subclassing the shared `Enemy`
+base (`src/enemies/enemy.gd`). Everything that targets or counts enemies keys on
+the group string **`Enemy.GROUP` = `"imps"`** — both types join it, and so must
+any new enemy (or you must generalize targeting).
 
 | Service | File | Responsibility |
 |---|---|---|
-| Animation | `src/enemies/imp_anim.gdshader` | Vertex walk/attack/death + glowing eyes (no skeleton) |
-| Spawner | `src/enemies/wave_spawner.gd` | Drips waves, scales stats, ⚠ hardcodes `ImpScript.new()` |
+| **Base AI** | `src/enemies/enemy.gd` | Shared chaser logic: movement, separation, island-clamp, knockback, hit-flash, emerge, melee, death/gore, model build + shader wiring |
+| Animation | `src/enemies/imp_anim.gdshader` | Vertex walk/attack/death + glowing eyes (no skeleton); reused by both enemy types |
+| Spawner | `src/enemies/wave_spawner.gd` | Point-budget drip: imp = 1 pt, zombie = 2 pts; zombie share gated/capped by `_zombie_share(wave)`, zombies from wave 2 |
 | Spawn FX | `src/fx/portal.gd` | Summoning circle; freezes the monster via `emerge()` |
-| Death FX | `src/fx/gore.gd` + `gib.gd` | Gib chunks + directional blood decals |
+| Death FX | `src/fx/gore.gd` + `gib.gd` | Gib chunks + directional blood decals; accepts optional `blood_tints`/`gib_colors` lists (zombie uses red+green) |
 | Combat numbers | `src/fx/damage_number.gd` | Flying damage numbers (free via `take_damage`) |
 | Loot | `src/loot/xp_orb_field.gd` | Connects to `died(world_pos, xp_value)` |
 | Shadow | `src/fx/blob_shadow.gd` | Available but **unused** today |
 
-### 2a. All enemy properties (`imp.gd`)
+### 2a. All enemy properties
+
+**Base class (`enemy.gd`) + subclasses (`imp.gd`, `zombie.gd`):**
+
+Shared logic lives in `Enemy` (`src/enemies/enemy.gd`). Subclasses override three hooks:
+- `_configure()` — set instance vars (`speed`, `model_height`, `eye_color`, gait knobs, etc.). Called before `_ready` populates the node. Do **not** touch spawner-set combat numbers (`max_hp`, `attack_damage`, `xp_value`) here.
+- `_model_scene() -> PackedScene` — return the preloaded GLB for this enemy.
+- `_spawn_gore(blood_spatters, hit_dir)` — override to change the death FX palette (default = imp red via `Gore.spawn_death`).
+
+Per-wave scaling consts (`BASE_HP`, `BASE_ATTACK_DAMAGE`, `BASE_XP`) live on the **subclass** as `const`, so the spawner can read them without instantiating. `ENEMY_NAME` is a `const String` returned by `enemy_type()`.
 
 **Identity / model:**
-- `class_name`, `extends Node3D`, `GROUP = "imps"`, `add_to_group(GROUP)` in `_ready`.
-- `MODEL` = `res://models/imp_opt.glb` (+ baked textures). `_fit_model()` auto-scales to `IMP_HEIGHT` (1.3) and sits the base on the ground; `MODEL_YAW` (PI) faces it forward (−Z).
+- `class_name Enemy`, `extends Node3D`, `const GROUP := "imps"`, `add_to_group(GROUP)` in `_ready`.
+- Imp: `MODEL` = `res://models/imp_opt.glb`, `model_height` 1.3 (base default). Zombie: `MODEL` = `res://models/zombie_opt.glb`, `model_height` 1.8.
+- `_fit_model()` auto-scales to `model_height` and sits the base on the ground; `model_yaw` (PI) faces it forward (−Z).
 - Casts no real shadow (`cast_shadow = OFF`); `BlobShadow.make(r)` is available if you want a grounding disc.
 
 **Movement / AI stats:**
@@ -133,20 +145,20 @@ enemy must join it (or you must generalize targeting).
 | Edge margin | `EDGE_MARGIN` = 0.6 | keep inside the coastline |
 | Terrain | samples `IslandShape.surface_height` each frame | walks the hills (added 2026-06-27) |
 
-**Combat stats:**
+**Combat stats (imp / zombie):**
 
-| Property | Const → per-wave | Notes |
-|---|---|---|
-| HP | `BASE_HP` 3.0 → `max_hp` | spawner adds `HP_PER_WAVE` 3.0/wave × power mult |
-| Attack damage | `BASE_ATTACK_DAMAGE` 1.0 → `attack_damage` | spawner adds `ATTACK_DMG_PER_WAVE` 1.0/wave |
-| Attack range | `ATTACK_RANGE` = 1.4 | plays the jab + melee hit |
-| Attack cooldown | `ATTACK_COOLDOWN` = 0.8 | seconds between hits |
-| Attack blend | `ATTACK_SMOOTH` = 6.0 | ease into/out of the attack pose |
-| XP value | `BASE_XP` 1.0 → `xp_value` | spawner adds `XP_PER_WAVE` 1.0/wave; emitted on death |
-| Knockback | `KNOCKBACK` 6.5 / `KNOCKBACK_DAMP` 14.0 | shove along the bolt on a non-lethal hit |
-| Hit slow | `HIT_SLOW_TIME` 0.45 / `HIT_SLOW_FACTOR` 0.45 | brief slow after a hit |
-| Hit flash | `HIT_FLASH_TIME` 0.12 / `DEATH_FLASH` 0.22 | white pulse via shader `hit` uniform |
-| Death | `DEATH_TIME` 0.4 | corpse crumple + sink (shader `death`) |
+| Property | Imp base | Zombie base | Per-wave | Notes |
+|---|---|---|---|---|
+| HP | `BASE_HP` 3.0 | `BASE_HP` 30.0 | `+HP_PER_WAVE` 2.0/wave × power mult | spawner sets `max_hp` |
+| Attack damage | `BASE_ATTACK_DAMAGE` 1.0 | `BASE_ATTACK_DAMAGE` 2.0 | `+ATTACK_DMG_PER_WAVE` 0.5/wave | |
+| Attack range | `attack_range` 1.4 | `attack_range` 1.7 | — | plays the jab + melee hit |
+| Attack cooldown | `attack_cooldown` 0.8 | `attack_cooldown` 1.2 | — | seconds between hits |
+| Attack blend | `attack_smooth` 6.0 | (same) | — | ease into/out of the attack pose |
+| XP value | `BASE_XP` 1.0 | `BASE_XP` 2.0 | `+XP_PER_WAVE` 1.0/wave | emitted on death |
+| Knockback | `knockback` 6.5 / `knockback_damp` 14.0 | (same) | — | shove along the bolt on a non-lethal hit |
+| Hit slow | `hit_slow_time` 0.45 / `hit_slow_factor` 0.45 | (same) | — | brief slow after a hit |
+| Hit flash | `hit_flash_time` 0.12 / `death_flash` 0.22 | (same) | — | white pulse via shader `hit` uniform |
+| Death | `death_time` 0.4 | (same) | — | corpse crumple + sink (shader `death`) |
 
 **Spawn lifecycle:**
 - `emerge(duration)` — freezes + scales up from `EMERGE_SCALE_FROM` (0.2) while the portal is open (`EMERGE_TIME` 1.0 in the spawner). Killable while emerging.
@@ -160,34 +172,31 @@ enemy must join it (or you must generalize targeting).
 - Eyes: `eye_pos` (from mesh AABB via `EYE_*_FRAC`), `eye_radius`, `eye_softness`, `eye_emission` (`EYE_COLOR`), `eye_energy` (`EYE_ENERGY` 3 → blooms). Mirrored across x=0 for the second eye.
 - `BODY_COLOR` (0.45,0.08,0.08) = blood/gib tint + albedo fallback when the model has no texture.
 
-**Death FX** (`gore.gd`): `GIB_COUNT` 8 / `HIT_GIB_COUNT` 3, `GIB_CONE`, blood textures (`blood_direct_*`, `blood_spot_*`), `BLOOD_TINT`, `BLOOD_HOLD`/`BLOOD_FADE`, `BLOOD_MAX` 600 cap. Driven by the killing projectile's blood count + travel dir.
+**Death FX** (`gore.gd`): `GIB_COUNT` 8 / `HIT_GIB_COUNT` 3, `GIB_CONE`, blood textures (`blood_direct_*`, `blood_spot_*`), `BLOOD_TINT`, `BLOOD_HOLD`/`BLOOD_FADE`, `BLOOD_MAX` 600 cap. Driven by the killing projectile's blood count + travel dir. Pass optional `blood_tints`/`gib_colors` lists to `Gore.spawn_death` for a custom palette (the Zombie uses `[BLOOD_TINT, GORE_TOXIC_GREEN]` / `[red, green]`); the Imp path uses empty-list defaults (unchanged).
 
 **Audio:** none. ⚠ Enemies have **no spawn/attack/death SFX** today — only the weapon-side `ImpactSfx` thud when a bolt connects. Adding enemy sound is greenfield.
 
 ### 2b. Checklist — register a new enemy
 
-Fastest path (a melee chaser variant): copy `imp.gd`, tune consts, register in the spawner.
+Fastest path (a melee chaser variant): subclass `enemy.gd`, override the three hooks, register in the spawner.
 
-- [ ] **New script** `src/enemies/<enemy>.gd` — `extends Node3D`; `add_to_group("imps")` (so guns, off-screen indicators, and the spawner's alive-count find it) **or** introduce a new group and generalize the targeting set (`WeaponRing._assign_targets`, `Projectile._first_hit`, `Marine._refresh_targets`/`_nearest_on_side`, `offscreen_indicators.gd`).
-- [ ] **Required interface** so existing systems work unchanged:
-  - `var player`, `var obstacles`, `var max_hp/hp`, `var attack_damage`, `var xp_value`.
-  - `signal died(world_pos: Vector3, xp_value: float)` — loot listens.
-  - `func emerge(duration)` — portal freeze.
-  - `func take_damage(amount, blood_spatters := 3, hit_dir := Vector3.ZERO)` — projectiles call this.
-  - per-frame: chase + `_separation()` + `_clamp_to_island()` + `obstacles.resolve(pos, BODY_RADIUS, IslandShape.surface_height(x, z))`.
-- [ ] **Model** — add `models/<enemy>.glb` (+ textures, import). Set `MODEL`, `IMP_HEIGHT`-equiv, `MODEL_YAW`; reuse `_fit_model`/`_merged_aabb`.
-- [ ] **Animation** — reuse `imp_anim.gdshader` (set `face_dir`, `local_min_y/height`, `eye_pos`, `phase`) or author a new shader for a different gait. Wire `attack`/`hit`/`death` uniforms.
-- [ ] **Stats** — set the full block above (speed, HP, XP, attack dmg/range/cooldown, body radius, separation, knockback, flash/slow, death time, eye colour, `BODY_COLOR`).
-- [ ] **Spawner** (`wave_spawner.gd`) — `_spawn_one()` hardcodes `ImpScript.new()` (⚠). Use the dormant `_variant_for(pf)` hook: gate the new enemy by `_power_factor` (e.g. `pf > 1.4 → brute`, `pf > 2.0 → fast`) and instance it there, handing it `player`, `obstacles`, scaled `max_hp`/`attack_damage`/`xp_value`, then `emerge()` + a `Portal`. Add per-wave scaling consts if its curve differs.
+- [ ] **New script** `src/enemies/<enemy>.gd` — `extends "res://src/enemies/enemy.gd"`. It already joins `"imps"` and implements the full required interface; you only need the three hooks below.
+- [ ] **`_configure()`** — set per-enemy tunables (`speed`, `model_height`, `eye_color`, `body_color`, gait knobs, `attack_range`, `attack_cooldown`, etc.). **Do not** touch spawner-set combat numbers (`max_hp`, `attack_damage`, `xp_value`).
+- [ ] **`_model_scene() -> PackedScene`** — return the preloaded GLB for this enemy.
+- [ ] **`_spawn_gore(blood_spatters, hit_dir)`** (optional) — override for a custom death-FX palette; base calls `Gore.spawn_death` with `body_color`.
+- [ ] **Per-wave consts** — define `const BASE_HP`, `BASE_ATTACK_DAMAGE`, `BASE_XP`, `ENEMY_NAME` on the subclass so the spawner can read them without instantiating.
+- [ ] **Model** — add `models/<enemy>.glb` (+ textures, import). The base handles `_fit_model`/`_merged_aabb`; set `model_height`/`model_yaw` in `_configure()`.
+- [ ] **Animation** — `imp_anim.gdshader` is wired by the base. Set gait uniforms (`walk_freq`, `stride`, `twist`, `bob`, `squash`, `lunge_rate`, `lunge_reach`) in `_configure()` for a distinct shamble/lurch.
+- [ ] **Spawner** (`wave_spawner.gd`) — add the new type to `_spawn_one()` alongside the imp/zombie pick. The point-budget pattern: define a `<TYPE>_COST` const and a share/gate function (like `_zombie_share(wave)` for the zombie). Read `<TypeScript>.BASE_HP` etc. the same way. Update `_start_wave` comment if the count semantics change.
 - [ ] **Spawn FX (optional)** — reuse `Portal` as-is, or pass a per-enemy portal colour/size.
-- [ ] **Death FX** — works via `Gore` for free; set `BODY_COLOR` for its blood/gib tint. Override gib size/count if desired.
+- [ ] **Death FX** — works via `Gore` for free; set `body_color` + override `_spawn_gore` if you want a custom palette.
 - [ ] **Loot** — automatic: `xp_orb_field.on_imp_spawned` connects to `died`. Confirm `spawner.imp_spawned.emit(enemy)` fires for the new enemy.
 - [ ] **Audio (optional, greenfield)** — add an enemy SFX class (mirror `ImpactSfx`: pooled players, clip set) for spawn/attack/death, and a clip set under `sound/`. Trigger from `emerge()`/attack/`die()`.
-- [ ] **Shadow (optional)** — `add_child(BlobShadow.make(BODY_RADIUS))` to ground it.
+- [ ] **Shadow (optional)** — `add_child(BlobShadow.make(body_radius))` to ground it.
 - [ ] **Test** — `test/suites/enemies_suite.gd`: add the new enemy to the spawn/scaling tests; assert it joins the targeted group and emits `died` with its `xp_value`.
 
-### 2c. ⚠ Imp-hardcoded spots to generalize
-`wave_spawner.gd:_spawn_one()` (instances `ImpScript` directly; `_variant_for` is the intended seam) · everything that targets `Imp.GROUP = "imps"` (`weapon_ring`, `projectile`, `marine`, `offscreen_indicators`) — fine if the new enemy joins `"imps"`, otherwise generalize the group set · no enemy-side audio exists yet.
+### 2c. Remaining hardcoded spots
+Everything that targets `Enemy.GROUP = "imps"` (`weapon_ring`, `projectile`, `marine`, `offscreen_indicators`) — fine for any enemy that joins `"imps"` (both Imp and Zombie do); only generalize if you add a non-`"imps"` group. No enemy-side audio exists yet.
 
 ---
 
@@ -195,4 +204,4 @@ Fastest path (a melee chaser variant): copy `imp.gd`, tune consts, register in t
 
 **New weapon (bolt-firing gun kind):** `Kind` + shape + 4 tooltip arms + stat scaling in `inventory_item.gd`; `equipped_*` in `inventory.gd`; stat/model wiring in `weapon_ring.gd`; icon in `grid_view.gd` (+ `add-item-art`). Reuse `Gun`, `Projectile`, `ShotSfx`.
 
-**New enemy (melee chaser):** one `src/enemies/<enemy>.gd` joining `"imps"` with the required interface + stat block + model + (reused) anim shader; register in `wave_spawner.gd:_variant_for()`. Reuse `Portal`, `Gore`, loot. Add SFX only if you want enemy sound (none exists yet).
+**New enemy (melee chaser):** `src/enemies/<enemy>.gd` extending `enemy.gd`; override `_configure()` (tunables), `_model_scene()` (GLB), `_spawn_gore()` (palette, optional); define `BASE_HP/BASE_ATTACK_DAMAGE/BASE_XP/ENEMY_NAME` consts; register in `wave_spawner.gd:_spawn_one()` (point-budget pick, like the zombie). Reuse `Portal`, `Gore`, loot. Add SFX only if you want enemy sound (none exists yet).

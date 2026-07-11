@@ -1,179 +1,85 @@
 class_name Gore
 extends RefCounted
-## Death effects for an imp: a burst of gib chunks (temporary, physics-y) plus a
-## splatter of textured blood decals on the ground. How many decals is decided by
-## the caller (the projectile picks an amount for its type — see Projectile), so a
-## weak bolt barely bleeds and a heavy weapon paints the floor. Each decal sits
-## for its own randomized lifetime, then fades out and frees itself — so the
-## island stays gory mid-fight but doesn't accumulate forever. Reference via
-## `const Gore := preload(...)` and call Gore.spawn_death(...).
+## Gore for an enemy: a burst of flying body-part chunks (gibs) — no ground decals, the
+## whole effect is airborne meat. spawn_death() blows the body apart (a wide burst biased
+## forward along the killing bolt); spawn_hit() sprays a smaller wound burst in the bolt's
+## direction. Callers pass a `gore_amount` (their projectile type) so a heavy weapon throws
+## more chunks. Reference via `const Gore := preload(...)` and call Gore.spawn_death(...).
 
 const GibScript := preload("res://src/fx/gib.gd")
 
-const GIB_COUNT := 8
-const HIT_GIB_COUNT := 3        # smaller flesh burst when a hit doesn't kill
-const GIB_CONE := 0.8           # gibs fly in a ±0.8 rad cone around the bolt's travel
-const BLOOD_SPREAD := 1.9       # how far the splatter scatters from the death point
-const BLOOD_JITTER := 0.4       # ±rad each decal's spray varies off the travel axis
-const BLOOD_GROUP := "blood"
-const BLOOD_MAX := 600          # ponytail: hard cap; oldest blood trimmed past this
-const BLOOD_HOLD := 7.0         # base seconds fully visible before fading (×0.8–1.2 per decal)
-const BLOOD_FADE := 3.0         # base fade-out duration, then the decal frees itself
+# ── Counts ───────────────────────────────────────────────────────────────────
+const KILL_GIBS := 12          # base chunks a kill throws (+ gore_amount from the killer)
+const HIT_GIBS := 6            # chunks a non-lethal hit sprays off the wound
+const GIB_CAP := 26            # ponytail: hard ceiling per burst — gibs are per-node physics FX;
+                               # pool / MultiMesh them if simultaneous wave-wipes ever spike node count
 
-# Directional splat textures: each sprays from its lower-left toward its top-right
-# corner. On a flat PlaneMesh (UVs u→+X, v→+Z) that diagonal is a fixed local
-# heading; this offset rotates the decal so the spray lines up with the world
-# travel direction. Calibrated by render — see the spray-points-forward test.
-const DECAL_DIR_OFFSET := PI * 0.25
-
-# Blood reads as a glowing sticker if it's bright + glossy on the near-black
-# ground (it even trips the scene's bloom). This dark, matte crimson tint sinks it
-# into the charred basalt — a deep stain, not neon. Multiplies the texture; varied
-# slightly per decal so copies don't read identical.
-const BLOOD_TINT := Color(0.5, 0.1, 0.08)
-const BLOOD_ROUGHNESS := 0.9    # matte: no wet specular glint to catch the eye
-
-# The directional splat textures (alpha cut-outs) — the forward spray. Random/decal.
-const BLOOD_TEXTURES := [
-	"res://decals/blood_direct_01.png",
-	"res://decals/blood_direct_02.png",
-	"res://decals/blood_direct_03.png",
-	"res://decals/blood_direct_04.png",
-	"res://decals/blood_direct_05.png",
-	"res://decals/blood_direct_06.png",
-]
-
-# Round, non-directional splats — one is laid on top at the impact point as the
-# central wound pool, over the directional spray.
-const BLOOD_POOL_TEXTURES := [
-	"res://decals/blood_spot_01.png",
-	"res://decals/blood_spot_02.png",
-	"res://decals/blood_spot_03.png",
-	"res://decals/blood_spot_04.png",
-	"res://decals/blood_spot_05.png",
-]
+# ── Flight tuning (the knobs the burst is built from) ─────────────────────────
+# DIRECTION — each chunk flies at a random yaw within ±cone of the bolt's travel.
+# A kill blows apart nearly all-round (wide cone, slight forward bias); a hit sprays a
+# tight forward fan off the wound.
+const KILL_CONE := 2.4         # ±rad around travel for a kill (~±137°: mostly all-round, still forward-biased)
+const HIT_CONE := 0.7          # ±rad for a non-lethal hit (a forward spray)
+# SPEED — horizontal launch speed range (units/s). Higher = chunks travel farther out.
+const SPEED_MIN := 3.0
+const SPEED_MAX := 9.0
+# ARC — upward launch speed range (units/s). Higher = higher pop + longer airtime, so the
+# chunk lands farther out (radius grows with both speed and arc). Gravity lives on the gib.
+const ARC_MIN := 3.5
+const ARC_MAX := 8.0
+# RADIUS — initial positional scatter around the body so chunks don't all erupt from one
+# point; the speed/arc-driven travel spreads them the rest of the way.
+const SPAWN_SCATTER := 0.35
+const SPAWN_HEIGHT := 0.6      # erupt from roughly torso height
+# CHUNKS — widely varied sizes so it reads as assorted body parts, not uniform cubes.
+const GIB_SIZE_MIN := 0.10
+const GIB_SIZE_MAX := 0.32
+const SPIN := 18.0             # max rad/s tumble on each axis
 
 
-## Spawn gibs + `blood_count` blood decals for a death at `pos`, parented under
-## `parent` (world space). The killer decides blood_count (its projectile type) and
-## `hit_dir` (its travel direction) so the gore sprays forward — relentless force.
-static func spawn_death(parent: Node, pos: Vector3, color: Color, blood_count: int, hit_dir: Vector3 = Vector3.ZERO) -> void:
+## Blow the body apart at `pos`: KILL_GIBS (+ gore_amount) chunks in a wide burst biased
+## along `hit_dir`. Optional `gib_colors` mixes tints (e.g. the zombie's red+green meat);
+## an empty list tints every chunk with `color` (the enemy's body colour).
+static func spawn_death(parent: Node, pos: Vector3, color: Color, gore_amount: int, hit_dir: Vector3 = Vector3.ZERO, gib_colors: Array = []) -> void:
 	var rng := RandomNumberGenerator.new()
 	rng.randomize()
-	# Horizontal travel direction; random if none supplied (e.g. a wave wipe) so
-	# the death still reads as a directional spray rather than a symmetric pool.
-	var fwd := Vector3(hit_dir.x, 0.0, hit_dir.z)
-	if fwd.length() < 0.01:
-		var a := rng.randf_range(0.0, TAU)
-		fwd = Vector3(cos(a), 0.0, sin(a))
-	fwd = fwd.normalized()
-	_spawn_gibs(parent, pos, color, rng, fwd)
-	_spawn_blood(parent, pos, rng, blood_count, fwd)
+	var fwd := _forward(hit_dir, rng)
+	var count := mini(KILL_GIBS + maxi(0, gore_amount), GIB_CAP)
+	_burst(parent, pos, color, rng, fwd, count, KILL_CONE, gib_colors)
 
 
-## Lighter feedback for a hit that does NOT kill: a small flesh burst + one blood
-## decal, sprayed forward along `hit_dir`. No central wound pool — that's a death cue.
+## Lighter feedback for a hit that does NOT kill: a small flesh burst sprayed forward along
+## `hit_dir` (a tight cone), tinted with the enemy's body colour.
 static func spawn_hit(parent: Node, pos: Vector3, color: Color, hit_dir: Vector3 = Vector3.ZERO) -> void:
 	var rng := RandomNumberGenerator.new()
 	rng.randomize()
+	var fwd := _forward(hit_dir, rng)
+	_burst(parent, pos, color, rng, fwd, HIT_GIBS, HIT_CONE, [])
+
+
+## Horizontal travel direction from the killing bolt; a random heading if none was supplied
+## (e.g. a wave wipe) so the burst still reads directional rather than a symmetric pop.
+static func _forward(hit_dir: Vector3, rng: RandomNumberGenerator) -> Vector3:
 	var fwd := Vector3(hit_dir.x, 0.0, hit_dir.z)
 	if fwd.length() < 0.01:
 		var a := rng.randf_range(0.0, TAU)
-		fwd = Vector3(cos(a), 0.0, sin(a))
-	fwd = fwd.normalized()
-	_spawn_gibs(parent, pos, color, rng, fwd, HIT_GIB_COUNT)
-
-	# A single directional spray decal ahead of the impact (no pool on top).
-	var tex: Texture2D = load(BLOOD_TEXTURES[rng.randi_range(0, BLOOD_TEXTURES.size() - 1)])
-	var yaw := atan2(-fwd.x, -fwd.z) + DECAL_DIR_OFFSET + rng.randf_range(-BLOOD_JITTER, BLOOD_JITTER)
-	var off := fwd * rng.randf_range(0.0, 0.8)
-	_decal(parent, tex, pos + off, rng.randf_range(0.6, 1.2), yaw, 0.03, rng)
-	_trim_blood(parent)
+		return Vector3(cos(a), 0.0, sin(a))
+	return fwd.normalized()
 
 
-static func _spawn_gibs(parent: Node, pos: Vector3, color: Color, rng: RandomNumberGenerator, fwd: Vector3, count: int = GIB_COUNT) -> void:
+## Launch `count` chunks around `fwd`, spread within ±`cone`, each with its own speed, arc,
+## spin, size and a little spawn scatter — an eruption of body parts.
+static func _burst(parent: Node, pos: Vector3, color: Color, rng: RandomNumberGenerator, fwd: Vector3, count: int, cone: float, gib_colors: Array) -> void:
+	var base := pos + Vector3(0.0, SPAWN_HEIGHT, 0.0)
 	for i in count:
 		var g := GibScript.new()
-		g.color = color
-		g.size = rng.randf_range(0.12, 0.26)
+		g.color = gib_colors[rng.randi_range(0, gib_colors.size() - 1)] if not gib_colors.is_empty() else color
+		g.size = rng.randf_range(GIB_SIZE_MIN, GIB_SIZE_MAX)
 		parent.add_child(g)
-		g.global_position = pos + Vector3(0.0, 0.5, 0.0)
-		# Fly mostly along the bolt's travel: a random cone around fwd, varied
-		# speed + upward arc so they don't launch in lockstep.
-		var horiz := fwd.rotated(Vector3.UP, rng.randf_range(-GIB_CONE, GIB_CONE))
-		var out := horiz * rng.randf_range(2.5, 6.0)
-		out.y = rng.randf_range(2.5, 5.5)
-		var spin := Vector3(rng.randf_range(-12, 12), rng.randf_range(-12, 12), rng.randf_range(-12, 12))
-		g.launch(out, spin)
-
-
-static func _spawn_blood(parent: Node, pos: Vector3, rng: RandomNumberGenerator, count: int, fwd: Vector3) -> void:
-	var base_yaw := atan2(-fwd.x, -fwd.z) + DECAL_DIR_OFFSET   # texture spray aligned to travel
-	var side := Vector3(-fwd.z, 0.0, fwd.x)                    # perpendicular, for lateral scatter
-	for i in count:
-		var tex: Texture2D = load(BLOOD_TEXTURES[rng.randi_range(0, BLOOD_TEXTURES.size() - 1)])
-		var s := rng.randf_range(0.6, 2.2)         # widely varied splat sizes
-		# Bias the splatter forward along travel (the force carries it), with some
-		# lateral spread — a fan ahead of the impact, not a ring around it.
-		var along := rng.randf_range(-0.2, 1.0) * BLOOD_SPREAD
-		var lateral := rng.randf_range(-0.5, 0.5) * BLOOD_SPREAD
-		var off := fwd * along + side * lateral
-		var yaw := base_yaw + rng.randf_range(-BLOOD_JITTER, BLOOD_JITTER)
-		_decal(parent, tex, pos + off, s, yaw, 0.03 + float(i) * 0.003, rng)
-
-	# One round impact pool on top, at the hit point — the central wound, over the
-	# directional spray (highest y so it draws last). Round → any rotation.
-	var ptex: Texture2D = load(BLOOD_POOL_TEXTURES[rng.randi_range(0, BLOOD_POOL_TEXTURES.size() - 1)])
-	_decal(parent, ptex, pos, rng.randf_range(1.0, 1.8), rng.randf_range(0.0, TAU),
-		0.03 + float(count) * 0.003 + 0.01, rng)
-
-	_trim_blood(parent)
-
-
-## Build one flat ground blood decal (textured PlaneMesh) and start its fade.
-static func _decal(parent: Node, tex: Texture2D, pos: Vector3, size: float, yaw: float, y_off: float, rng: RandomNumberGenerator) -> void:
-	var mat := StandardMaterial3D.new()
-	mat.albedo_texture = tex
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA   # honour the splat's alpha cut-out
-	var k := rng.randf_range(0.8, 1.0)                     # per-decal value variance
-	mat.albedo_color = Color(BLOOD_TINT.r * k, BLOOD_TINT.g * k, BLOOD_TINT.b * k, 1.0)
-	mat.roughness = BLOOD_ROUGHNESS
-	mat.metallic = 0.0
-	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	var plane := PlaneMesh.new()    # lies flat in XZ, faces +Y — a ground decal
-	plane.size = Vector2(size, size)
-	var mi := MeshInstance3D.new()
-	mi.mesh = plane
-	mi.material_override = mat
-	mi.add_to_group(BLOOD_GROUP)
-	parent.add_child(mi)
-	mi.global_position = pos + Vector3(0.0, y_off, 0.0)    # staggered y: no z-fight
-	mi.rotation.y = yaw
-	_fade_out(mi, mat, rng)
-
-
-## Hold the decal, then fade its alpha to nothing and free it — so blood lingers
-## but doesn't pile up forever. Each decal scales its hold + fade by a random
-## 0.8–1.2, so a batch spawned together still disappears at staggered times. A
-## node-bound tween dies with the node if it's trimmed first.
-static func _fade_out(mi: MeshInstance3D, mat: StandardMaterial3D, rng: RandomNumberGenerator) -> void:
-	var k := rng.randf_range(0.8, 1.2)
-	var col := mat.albedo_color
-	var tw := mi.create_tween()
-	tw.tween_interval(BLOOD_HOLD * k)
-	tw.tween_property(mat, "albedo_color", Color(col.r, col.g, col.b, 0.0), BLOOD_FADE * k)
-	tw.tween_callback(mi.queue_free)
-
-
-## Keep the blood decal count bounded — free the oldest beyond BLOOD_MAX.
-static func _trim_blood(node: Node) -> void:
-	var tree := node.get_tree()
-	if tree == null:
-		return
-	var blood := tree.get_nodes_in_group(BLOOD_GROUP)
-	var excess := blood.size() - BLOOD_MAX
-	var i := 0
-	while i < excess:
-		if is_instance_valid(blood[i]):
-			blood[i].queue_free()
-		i += 1
+		var scatter := Vector3(rng.randf_range(-SPAWN_SCATTER, SPAWN_SCATTER), 0.0, rng.randf_range(-SPAWN_SCATTER, SPAWN_SCATTER))
+		g.global_position = base + scatter
+		var horiz := fwd.rotated(Vector3.UP, rng.randf_range(-cone, cone))
+		var vel := horiz * rng.randf_range(SPEED_MIN, SPEED_MAX)
+		vel.y = rng.randf_range(ARC_MIN, ARC_MAX)
+		var spin := Vector3(rng.randf_range(-SPIN, SPIN), rng.randf_range(-SPIN, SPIN), rng.randf_range(-SPIN, SPIN))
+		g.launch(vel, spin)

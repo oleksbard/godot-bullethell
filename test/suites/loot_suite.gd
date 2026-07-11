@@ -54,7 +54,7 @@ func _test_xp_orb(t: TestContext) -> void:
 	t.ok(d1 < d0 - 0.1, "an orb within magnet range flies toward the marine (%.2f -> %.2f)" % [d0, d1])
 	orb.free()
 
-	# Out of magnet range -> stays put; vacuum() overrides that.
+	# Out of magnet range -> stays put; bank_drift() makes it rise and shrink out (never flies in).
 	var orb2: Node3D = XpOrbScript.new()
 	orb2.player = player
 	holder.add_child(orb2)
@@ -66,12 +66,16 @@ func _test_xp_orb(t: TestContext) -> void:
 		orb2._process(0.05)
 	var e1 := orb2.global_position.distance_to(player.global_position)
 	t.ok(absf(e1 - e0) < 0.1, "an orb beyond magnet range stays put (%.2f -> %.2f)" % [e0, e1])
-	orb2.vacuum()
-	for i in 5:
+	orb2.bank_drift()
+	var y0 := orb2.position.y
+	for i in 60:
+		if orb2.is_queued_for_deletion():
+			break
 		orb2._process(0.05)
-	var e2 := orb2.global_position.distance_to(player.global_position)
-	t.ok(e2 < e0 - 0.1, "vacuum() pulls a far orb toward the marine (%.2f)" % e2)
-	orb2.free()
+	t.ok(orb2.position.y > y0 and orb2.is_queued_for_deletion(),
+		"bank_drift() rises the mote off to the vault and frees it (never flies to the marine)")
+	if not orb2.is_queued_for_deletion():
+		orb2.free()
 
 	# Within collect range -> credits XP once and frees itself.
 	var m: Node3D = MarineScript.new()
@@ -117,46 +121,64 @@ func _test_xp_orb_field(t: TestContext) -> void:
 	imp.die()                                         # emits died -> field.drop_orb
 	t.ok(field.get_child_count() == before + 1, "a tracked imp's death drops one orb into the field")
 
-	var orb := field.get_child(field.get_child_count() - 1)
-	orb.set_process(false)
-	field.vacuum_all()
-	t.ok(orb._vacuum, "vacuum_all() flags every orb to fly in")
-
 	var n0 := field.get_child_count()
 	field.drop_orb(Vector3(5.0, 0.0, 5.0), 0.0, 4)    # a 4-soul kill bursts into 4 motes (1 main + 3 bonus)
 	t.ok(field.get_child_count() == n0 + 4, "a 4-soul drop bursts into 4 motes (got %d)" % (field.get_child_count() - n0))
 
+	# With souls in the vault, each kill drops one EXTRA mote and drains the vault by one.
+	var st: Node = PlayerStatsScript.new()
+	st.bank_souls(2)
+	field.stats = st
+	var n1 := field.get_child_count()
+	field.drop_orb(Vector3.ZERO, 0.0, 1)              # 1 main mote + 1 bonus pulled from the vault
+	t.ok(field.get_child_count() == n1 + 2, "a kill drops one bonus mote from the vault (got %d)" % (field.get_child_count() - n1))
+	t.ok(st.banked_souls == 1, "the bonus drop drains the vault by one (banked %d)" % st.banked_souls)
+	field.drop_orb(Vector3.ZERO, 0.0, 1)              # drains the last banked soul
+	field.drop_orb(Vector3.ZERO, 0.0, 1)              # vault empty -> no more bonus motes
+	t.ok(st.banked_souls == 0, "the vault empties and stops giving bonuses (banked %d)" % st.banked_souls)
+
 	await t.frame()
+	st.free()
 	holder.free()
 
 
-## On a wave clear the field vacuums leftover souls and only emits `drained` (which Main uses
-## to open the wave menu) once they've all flown into the player.
+## On a wave clear the field banks every uncollected mote (soul -> vault, XP still credited to
+## the player) and only emits `drained` (which Main uses to open the wave menu) once the
+## leftover motes have drifted off and freed themselves.
 func _test_wave_drain(t: TestContext) -> void:
 	t.suite = "XpOrbField.drain"
 	var holder := Node3D.new()
 	t.root().add_child(holder)
-	var player := Node3D.new()
-	holder.add_child(player)
+	var marine: Node3D = MarineScript.new()
+	holder.add_child(marine)
+	var st: Node = PlayerStatsScript.new()
+	st.xp_to_next = 100.0                             # keep add_xp from levelling during the test
+	marine.add_child(st)
+	marine.stats = st
 	var field: Node3D = XpOrbFieldScript.new()
-	field.player = player
+	field.player = marine
+	field.stats = st
 	holder.add_child(field)
 	await t.frame()
+	marine.set_process(false)
 	var fired := [0]
 	field.drained.connect(func() -> void: fired[0] += 1)
 
-	field.drop_orb(Vector3(9.0, 0.0, 0.0), 0.0, 1)    # one leftover soul, far from the player
+	field.drop_orb(Vector3(9.0, 0.0, 0.0), 3.0, 1)    # one leftover mote carrying 3 XP, far from the marine
 	var orb := field.get_child(field.get_child_count() - 1)
-	orb.set_process(false)                            # freeze it so it can't self-collect mid-test
-	field.vacuum_all()
+	orb.set_process(false)                            # freeze it so the drain wait is driven by hand
+	field.bank_leftovers()
+	t.ok(orb._banking, "bank_leftovers() sets every leftover mote drifting off to the vault")
+	t.ok(st.banked_souls == 1, "the leftover soul is sent to the vault (banked %d)" % st.banked_souls)
+	t.ok(is_equal_approx(st.xp, 3.0), "leftover XP is still credited to the player (%.1f)" % st.xp)
 	field._process(0.1)
-	t.ok(fired[0] == 0, "drained holds while a soul is still in the field")
+	t.ok(fired[0] == 0, "drained holds while a mote is still drifting in the field")
 
-	orb.free()                                        # the soul reaches the player (orb freed)
+	orb.free()                                        # the mote finished drifting off (freed)
 	field._process(0.1)
-	t.ok(fired[0] == 1, "drained fires once every soul has flown in")
+	t.ok(fired[0] == 1, "drained fires once the field has emptied")
 
-	field.vacuum_all()                                # no leftover souls -> menu can open at once
+	field.bank_leftovers()                            # no leftover motes -> menu can open at once
 	field._process(0.1)
 	t.ok(fired[0] == 2, "an empty field drains immediately")
 	holder.free()
@@ -196,6 +218,15 @@ func _test_souls(t: TestContext) -> void:
 	t.ok(hud._souls_count.text == "4", "HUD counter shows the current souls (%s)" % hud._souls_count.text)
 	stats.add_souls(2)
 	t.ok(hud._souls_count.text == "6", "HUD counter updates on souls_changed (%s)" % hud._souls_count.text)
+
+	# The vault counter shows when souls are banked and hides once it empties.
+	t.ok(not hud._bank_orb.visible, "the vault counter is hidden while the vault is empty")
+	stats.bank_souls(3)
+	t.ok(hud._bank_count.text == "3" and hud._bank_orb.visible, "HUD shows the vault counter when souls are banked (%s)" % hud._bank_count.text)
+	stats.draw_banked_soul()
+	stats.draw_banked_soul()
+	stats.draw_banked_soul()
+	t.ok(not hud._bank_orb.visible, "the vault counter hides once the vault empties")
 	hud.free()
 	stats.free()
 
@@ -239,9 +270,9 @@ func _test_item_level_and_power(t: TestContext) -> void:
 	sg5.item_level = 5
 	t.ok(sg5.buy_price() == roundi(14.0 * pow(5.0, 1.5)), "L5 sawed-off price scales from its 14 base (got %d)" % sg5.buy_price())
 
-	# Magazine + reload: 7 rounds; L1 reloads in 2.0s; higher level reloads faster.
+	# Magazine + reload: 7 rounds; L1 reloads in 1.5s; higher level reloads faster.
 	t.ok(p1.magazine_size() == 7, "pistol magazine is 7")
-	t.ok(is_equal_approx(p1.reload_time_value(), 2.0), "L1 reload time is 2.0s (got %.2f)" % p1.reload_time_value())
+	t.ok(is_equal_approx(p1.reload_time_value(), 1.5), "L1 reload time is 1.5s (got %.2f)" % p1.reload_time_value())
 	t.ok(p5.reload_time_value() < p1.reload_time_value(),
 		"a higher-level pistol reloads faster (%.2f < %.2f)" % [p5.reload_time_value(), p1.reload_time_value()])
 

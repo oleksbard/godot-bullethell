@@ -27,7 +27,9 @@ const STASH_ROWS := 8
 const FIELD_COLS := 8
 const FIELD_ROWS := 6
 const BASE_OFFSET := Vector2i(2, 1)            # centers the 14-cell base in the 8x6 field
-const EXPANSION_PRICE_GROWTH := 1.6            # price multiplier per expansion already owned
+const EXPANSION_PRICE_GROWTH := 1.10           # price multiplier per slot already unlocked (field fullness)
+const GUN_DUP_GROWTH := 1.12                   # gun price multiplier per duplicate of the same kind owned (gentle — swap kinds freely)
+const ARTIFACT_DUP_GROWTH := 1.6               # artifact price multiplier per duplicate of the same kind owned (steep — stacking one climbs fast)
 
 var backpack: ExpandableGridScript
 var stash: InventoryGridScript
@@ -78,7 +80,7 @@ func loadout_power() -> int:
 
 
 ## How many expansion items the player owns (placed in the backpack + stored in the
-## stash). Drives the shop's escalating expansion price.
+## stash). Reported in tooltips/tests; the price now tracks field fullness instead.
 func expansion_count() -> int:
 	var n: int = backpack.ext_origin.size()
 	for it in stash.items_in_reading_order():
@@ -87,10 +89,36 @@ func expansion_count() -> int:
 	return n
 
 
-## The current soul price of an expansion of `kind`: base price × growth^owned.
+## The current soul price of an expansion of `kind`: base × growth^(slots already
+## unlocked in the field). Driven by how full the field is, not how many you've bought,
+## so it's reversible — pick an expansion back up and the freed slots drop the price.
 func expansion_price(kind: int) -> int:
 	var base_price: int = WeaponCatalogScript.get_def(kind).base_price
-	return roundi(float(base_price) * pow(EXPANSION_PRICE_GROWTH, float(expansion_count())))
+	var slots_used: int = maxi(0, backpack.valid.size() - backpack.base.size())
+	return roundi(float(base_price) * pow(EXPANSION_PRICE_GROWTH, float(slots_used)))
+
+
+## How many items of `kind` the player holds (backpack content + stash). Drives the
+## shop's per-kind duplicate inflation for guns and artifacts.
+func owned_count(kind: int) -> int:
+	var n := 0
+	for it in backpack.items_in_reading_order():
+		if it.kind == kind:
+			n += 1
+	for it in stash.items_in_reading_order():
+		if it.kind == kind:
+			n += 1
+	return n
+
+
+## The shop price of `item` right now. Expansions scale with field fullness; guns and
+## artifacts scale with how many of that kind you already own — guns gently, artifacts
+## steeply — so swapping to a different kind stays cheap while stacking one climbs.
+func shop_price(item: InventoryItemScript) -> int:
+	if item.item_type == WeaponDefScript.ItemType.EXPANSION:
+		return expansion_price(item.kind)
+	var growth: float = ARTIFACT_DUP_GROWTH if item.is_artifact() else GUN_DUP_GROWTH
+	return roundi(float(item.buy_price()) * pow(growth, float(owned_count(item.kind))))
 
 
 ## Place `item` in the stash at the first cell (reading order) where it fits; returns

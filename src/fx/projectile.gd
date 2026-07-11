@@ -18,16 +18,16 @@ const LIFETIME := 2.0
 const DEFAULT_RANGE := 40.0   # despawn after travelling this far if no weapon range is set
 const AIM_HEIGHT := 0.6     # aim at the imp's mass, not its feet
 
-# Blood this projectile type leaves per kill (rolled per hit). The basic bolt is
-# weak — a light spatter. Heavier weapons set a bigger range.
-const BLOOD_MIN := 1
-const BLOOD_MAX := 4
+# Extra gore chunks this projectile type throws per kill (rolled per hit). The basic bolt
+# is weak — a few extra chunks. Heavier weapons set a bigger range.
+const GORE_MIN := 1
+const GORE_MAX := 4
 
 var target: Node3D
 var damage := 5.0           # set by the WeaponRing from the firing gun
 var speed := SPEED          # per-weapon (WeaponRing sets from the def)
-var blood_min := BLOOD_MIN  # per-weapon blood spray range
-var blood_max := BLOOD_MAX
+var gore_min := GORE_MIN    # per-weapon extra-chunk range
+var gore_max := GORE_MAX
 var aim_dir := Vector3.ZERO # if non-zero, fly this heading (spread pellets); else aim at target
 var max_range := DEFAULT_RANGE   # per-weapon: despawn once it's flown this far (WeaponRing sets from def.range)
 var _dir := Vector3.ZERO
@@ -70,7 +70,7 @@ func _process(delta: float) -> void:
 	var hit := _first_hit(prev, global_position)
 	if hit != null:
 		hit_enemy.emit()
-		var killed: bool = hit.take_damage(damage, randi_range(blood_min, blood_max), _dir)
+		var killed: bool = hit.take_damage(damage, randi_range(gore_min, gore_max), _dir)
 		dealt.emit(damage, killed)        # credit the firing gun (damage + kill)
 		queue_free()
 

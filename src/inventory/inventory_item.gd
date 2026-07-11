@@ -10,6 +10,7 @@ enum Kind {
 	PISTOL, SAWED_OFF, EXPAND_1X1, EXPAND_2X2,
 	RUNE_OF_WRATH, HELLFIRE_COIL, QUICKSILVER_SIGIL, HOARDERS_MARK,
 	GREATER_WRATH, CHAIN_SIGIL, RESONATOR, CONDUIT, THE_FURNACE, THE_SUN,
+	EXPAND_1X3, EXPAND_1X4,   # appended at the end so existing kind values stay stable
 }
 
 const Self := preload("res://src/inventory/inventory_item.gd")   # cold-load safe self-ref

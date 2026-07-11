@@ -44,8 +44,8 @@ var spread_arc: float = 0.0                    # SPREAD total fan angle (radians
 
 # Projectile
 var proj_speed: float = 38.25
-var blood_min: int = 1
-var blood_max: int = 4
+var gore_min: int = 1          # extra gore chunks a kill by this weapon throws (min)
+var gore_max: int = 4          # ...and max (rolled per hit; see Projectile/Gore)
 
 # Audio
 var shot_clips: Array = []                     # clip paths; empty -> no sound

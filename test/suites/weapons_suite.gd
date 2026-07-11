@@ -465,7 +465,7 @@ func _test_weapon_catalog(t: TestContext) -> void:
 	t.ok(WeaponCatalogScript.PISTOL == InventoryItemScript.Kind.PISTOL, "catalog PISTOL key == Kind.PISTOL")
 	var p: Object = WeaponCatalogScript.get_def(WeaponCatalogScript.PISTOL)
 	t.ok(is_equal_approx(p.damage, 5.0), "pistol def base damage is 5")
-	t.ok(is_equal_approx(p.fire_interval, 1.7) and p.magazine == 7, "pistol def fire interval + magazine match today")
+	t.ok(is_equal_approx(p.fire_interval, 1.0) and p.magazine == 7, "pistol def fire interval + magazine match today")
 	t.ok(p.pattern == WeaponDefScript.Pattern.SINGLE, "pistol fires SINGLE")
 	var sg: Object = WeaponCatalogScript.get_def(WeaponCatalogScript.SAWED_OFF)
 	t.ok(sg.pattern == WeaponDefScript.Pattern.SPREAD and sg.pellets >= 2, "sawed-off fires SPREAD with multiple pellets")

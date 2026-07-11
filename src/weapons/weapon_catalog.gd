@@ -12,6 +12,8 @@ const PISTOL := 0       # == InventoryItem.Kind.PISTOL (asserted in tests)
 const SAWED_OFF := 1    # == InventoryItem.Kind.SAWED_OFF
 const EXPAND_1X1 := 2    # == InventoryItem.Kind.EXPAND_1X1
 const EXPAND_2X2 := 3    # == InventoryItem.Kind.EXPAND_2X2
+const EXPAND_1X3 := 14   # == InventoryItem.Kind.EXPAND_1X3 (appended at the enum end)
+const EXPAND_1X4 := 15   # == InventoryItem.Kind.EXPAND_1X4
 const RUNE_OF_WRATH := 4       # == InventoryItem.Kind.RUNE_OF_WRATH
 const HELLFIRE_COIL := 5
 const QUICKSILVER_SIGIL := 6
@@ -40,6 +42,12 @@ const SAWED_OFF_CELLS: Array[Vector2i] = [
 const EXPAND_1X1_CELLS: Array[Vector2i] = [Vector2i(0, 0)]
 const EXPAND_2X2_CELLS: Array[Vector2i] = [
 	Vector2i(0, 0), Vector2i(1, 0), Vector2i(0, 1), Vector2i(1, 1),   # XX / XX
+]
+const EXPAND_1X3_CELLS: Array[Vector2i] = [
+	Vector2i(0, 0), Vector2i(0, 1), Vector2i(0, 2),                   # X / X / X (3 tall, 1 wide)
+]
+const EXPAND_1X4_CELLS: Array[Vector2i] = [
+	Vector2i(0, 0), Vector2i(0, 1), Vector2i(0, 2), Vector2i(0, 3),   # X / X / X / X (4 tall, 1 wide)
 ]
 
 const PISTOL_CLIPS := [
@@ -108,9 +116,9 @@ static func _build() -> void:
 		"cells": PISTOL_CELLS.duplicate(),
 		"icon_path": "res://art/items/pistol.png",
 		"placeholder_color": Color(0.45, 0.55, 0.75, 0.95),
-		"damage": 5.0, "fire_interval": 1.7, "magazine": 7, "reload": 2.0, "range": 12.0,
+		"damage": 5.0, "fire_interval": 1.0, "magazine": 7, "reload": 1.5, "range": 11.0,
 		"pattern": WeaponDefScript.Pattern.SINGLE,
-		"proj_speed": 38.25, "blood_min": 1, "blood_max": 4,
+		"proj_speed": 38.25, "gore_min": 1, "gore_max": 4,
 		"shot_clips": PISTOL_CLIPS.duplicate(), "shot_peaks_db": PISTOL_PEAKS_DB.duplicate(),
 	})
 	_defs[SAWED_OFF] = WeaponDefScript.from({
@@ -121,10 +129,10 @@ static func _build() -> void:
 		"cells": SAWED_OFF_CELLS.duplicate(),
 		"icon_path": "res://assets/sawed-off.png",
 		"placeholder_color": Color(0.75, 0.5, 0.3, 0.95),
-		"damage": 2.0, "fire_interval": 1.1, "magazine": 2, "reload": 1.6, "range": 6.5,
+		"damage": 2.0, "fire_interval": 1.1, "magazine": 2, "reload": 1.6, "range": 6.0,
 		"base_price": 14,                                     # pricier than the 10-soul default
 		"pattern": WeaponDefScript.Pattern.SPREAD, "pellets": 6, "spread_arc": deg_to_rad(34.0),
-		"proj_speed": 30.0, "blood_min": 2, "blood_max": 6,
+		"proj_speed": 30.0, "gore_min": 2, "gore_max": 6,
 		"body": WeaponDefScript.Body.SAWED_OFF, "barrel_tip": Vector3(0.0, 0.02, -0.32),
 		"shot_clips": SAWED_OFF_CLIPS.duplicate(),
 	})
@@ -145,6 +153,26 @@ static func _build() -> void:
 		"flavor": "Drop it onto locked backpack slots to unlock that space for guns. Lift it and move it any time — unless a weapon is resting on top.",
 		"cells": EXPAND_2X2_CELLS.duplicate(),
 		"icon_path": "res://assets/expand-2x2.png",
+		"placeholder_color": Color(0.5, 0.45, 0.45, 0.95),
+		"base_price": 55,
+	})
+	_defs[EXPAND_1X3] = WeaponDefScript.from({
+		"name": "Hellforged Brace",
+		"item_type": WeaponDefScript.ItemType.EXPANSION,
+		"traits": [],
+		"flavor": "Drop it onto locked backpack slots to unlock that space for guns. Lift it and move it any time — unless a weapon is resting on top.",
+		"cells": EXPAND_1X3_CELLS.duplicate(),
+		"icon_path": "res://assets/expand-1x3.png",
+		"placeholder_color": Color(0.5, 0.45, 0.45, 0.95),
+		"base_price": 40,
+	})
+	_defs[EXPAND_1X4] = WeaponDefScript.from({
+		"name": "Infernal Girder",
+		"item_type": WeaponDefScript.ItemType.EXPANSION,
+		"traits": [],
+		"flavor": "Drop it onto locked backpack slots to unlock that space for guns. Lift it and move it any time — unless a weapon is resting on top.",
+		"cells": EXPAND_1X4_CELLS.duplicate(),
+		"icon_path": "res://assets/expand-1x4.png",
 		"placeholder_color": Color(0.5, 0.45, 0.45, 0.95),
 		"base_price": 55,
 	})

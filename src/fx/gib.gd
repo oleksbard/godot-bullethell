@@ -6,8 +6,9 @@ extends MeshInstance3D
 
 const MeshFactory := preload("res://src/lib/mesh_factory.gd")
 
+const GROUP := "gibs"       # so Gore bursts are countable (tests) and could be bulk-trimmed later
 const GRAVITY := 20.0
-const LIFETIME := 1.8
+const LIFETIME := 2.4       # chunk lingers on the ground a beat before shrinking away
 const FADE := 0.5           # shrink over the last FADE seconds
 
 var color := Color(0.45, 0.08, 0.08)
@@ -31,6 +32,7 @@ func _ready() -> void:
 	m.roughness = 0.7
 	m.cull_mode = BaseMaterial3D.CULL_DISABLED
 	material_override = m
+	add_to_group(GROUP)
 
 
 func _process(delta: float) -> void:

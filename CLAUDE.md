@@ -23,10 +23,12 @@ rests down. The body only turns *while moving*, toward the midpoint between its 
 targets, so it stays centred with the arms splayed evenly; WASD strafes/backpedals
 and the legs reverse their swing when moving backward. Guns 3–12 (if equipped)
 float around it and self-aim at the i-th closest, as before. Guns auto-fire
-bolts at the closest imps; imps spawn in doubling waves (15 → 30 → …), portalling in one
-at a time (each frozen ~1s in a glowing ground portal as it materializes, faster
-each wave), dying into gib chunks + directional blood that sprays forward along
-the bolt's path (the imp's body parts fly the same way); off-screen imps are
+bolts at the closest imps; two enemy types now exist — fast **imps** (1 spawn-budget
+point) and slow tanky **zombies** (2 points, sickly-green eyes, heavy red+green gore;
+mix in from wave 2, share capped so the imp horde never fully gives way) — portalling
+in one at a time (each frozen ~1s in a glowing ground portal as it materializes,
+faster each wave), dying into gib chunks + directional blood that sprays forward along
+the bolt's path; off-screen imps are
 flagged on the screen border. Next
 up: real gun/imp models, player health/damage. Specs: `docs/superpowers/specs/`.
 
@@ -96,8 +98,10 @@ src/
   world/   main.gd          # composition root: env, light, island, marine, waves, weapons, UI, camera
            hell_island.gd   # procedural charred-basalt island (IslandShape + ColorUtil)
   marine/  marine.gd        # WASD move + face-nearest-imp; per-arm aim at own imp; marine_01.glb, code walk, hand grips
-  enemies/ imp.gd           # "weak imp" placeholder (group "imps"); emerge() freezes it in the portal, then drifts at player
-           wave_spawner.gd  # drips a wave in one imp+portal at a time (wave 1 = 15), faster each wave
+  enemies/ enemy.gd         # shared chaser-enemy AI base: movement, separation, island-clamp, knockback, hit-flash, emerge, melee, death/gore, model build + imp_anim.gdshader wiring; subclass and set tunables in _configure(), model in _model_scene(), gore in _spawn_gore()
+           imp.gd           # weak imp (extends enemy.gd); keeps only its model, type label, and per-wave BASE_HP/BASE_ATTACK_DAMAGE/BASE_XP consts
+           zombie.gd         # slow (speed 1.4), tanky (BASE_HP 30) 2-point bullet-sponge (extends enemy.gd); sickly-green eyes, heavy red+green death gore; shambles in from wave 2
+           wave_spawner.gd  # point-budget spawner: imp = 1 pt, zombie = 2 pts; zombie share climbs with wave (_zombie_share), capped at 40%; wave 1 = 32 pts, grows linearly
   weapons/ gun.gd           # small pistol; self-aims when floating (held guns aimed by the ring), fires bolts, muzzle flash
            weapon_ring.gd   # first 2 pistols fixed in the hands (marine aims via the arm), rest float; gun i targets i-th closest imp
   fx/      projectile.gd    # straight bolt; aims once at spawn, flies straight, misses if dodged
@@ -109,6 +113,8 @@ src/
            impact_sfx.gd    # softer random thud when a bolt hits an imp (pooled; via Projectile.hit_enemy)
   lib/     mesh_factory.gd  color_util.gd  island_shape.gd   # reused from ../godot-prototype
 models/    marine_01.glb    # imported rigged marine (Mixamo-style bones, no baked anims)
+           imp_opt.glb      # optimized imp model (baked textures)
+           zombie_opt.glb   # optimized zombie model (baked textures, 2 329 tris)
 sound/     pistol_01..05.mp3  impact_01..03.mp3  # shot + hit samples (random per event)
 test/      run_tests.gd     # headless test runner (+ run_tests.sh)
 docs/      guidelines/  ideas/hell-atmosphere.md  superpowers/specs/

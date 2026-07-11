@@ -828,11 +828,10 @@ func _weighted_artifact(pool: Array) -> int:
 	return pool[0]
 
 
-## An expansion's price escalates with how many you own; a weapon uses its buy price.
+## Live shop price (delegates to Inventory): expansions scale with field fullness,
+## guns/artifacts with how many of that kind you already own.
 func _offer_price(item: Object) -> int:
-	if item.item_type == WeaponDefScript.ItemType.EXPANSION:
-		return inventory.expansion_price(item.kind)
-	return item.buy_price()
+	return inventory.shop_price(item)
 
 
 ## Paint offer slot `index`: icon, price, rarity border, and affordable/sold state.

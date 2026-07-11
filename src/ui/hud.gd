@@ -34,6 +34,7 @@ const HP_FILL := Color(0.8, 0.09, 0.06)
 const XP_FILL := Color(1.0, 0.62, 0.16)
 const SOUL := Color(0.2, 0.85, 1.0)        # cold cyan — matches the collected soul-motes (xp_orb.gd)
 const SOUL_RIM := Color(0.7, 0.97, 1.0)
+const BANK := Color(0.68, 0.45, 1.0)       # spectral violet — the vault of uncollected souls (re-drop next wave)
 
 # Layout.
 const MARGIN := 12
@@ -67,7 +68,9 @@ var _wave_label: Label      # "WAVE N", top-centre
 var _lvlup_stack: Control   # per-wave level-up medals, stacked under the HP bar
 var _reload_icon: StatusIconScript   # reload debuff badge, in the same row as the medals
 var _souls_orb: TextureRect # cyan soul glyph in the top-right counter
-var _souls_count: Label     # banked-souls number beside it
+var _souls_count: Label     # spendable-souls number beside it
+var _bank_orb: TextureRect  # violet soul glyph for the vault counter (left of the souls one)
+var _bank_count: Label      # uncollected-souls number waiting to re-drop next wave (hidden at 0)
 var _portrait: Node3D
 var _t := 0.0
 
@@ -87,9 +90,11 @@ func _ready() -> void:
 	stats.health_changed.connect(_on_health)
 	stats.xp_changed.connect(_on_xp)
 	stats.souls_changed.connect(_on_souls)
+	stats.bank_changed.connect(_on_bank)
 	_on_health(stats.health, stats.max_health)   # pull the current state once
 	_init_xp_display()
 	_souls_count.text = str(stats.souls)          # initial count (no pop on bind)
+	_on_bank(stats.banked_souls)                  # seed the vault counter (hidden while empty)
 
 
 func _process(delta: float) -> void:
@@ -298,6 +303,30 @@ func _build_souls(root: Control) -> void:
 	strip.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	root.add_child(strip)
 
+	# Vault counter (uncollected souls, re-drop next wave) — sits LEFT of the souls counter,
+	# violet-tinted so it reads apart from the spendable cyan souls. Hidden while empty.
+	var bsz := 26
+	_bank_orb = TextureRect.new()
+	_bank_orb.texture = SOUL_ICON
+	_bank_orb.modulate = BANK
+	_bank_orb.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_bank_orb.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	_bank_orb.custom_minimum_size = Vector2(bsz, bsz)
+	_bank_orb.pivot_offset = Vector2(bsz, bsz) * 0.5
+	_bank_orb.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	strip.add_child(_bank_orb)
+
+	_bank_count = Label.new()
+	_bank_count.text = "0"
+	_bank_count.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_bank_count.add_theme_font_size_override("font_size", 22)
+	_bank_count.add_theme_color_override("font_color", BANK)
+	_bank_count.add_theme_color_override("font_shadow_color", Color(0.0, 0.0, 0.0, 0.9))
+	_bank_count.add_theme_constant_override("shadow_offset_x", 2)
+	_bank_count.add_theme_constant_override("shadow_offset_y", 2)
+	_bank_count.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	strip.add_child(_bank_count)
+
 	var sz := 30
 	_souls_orb = TextureRect.new()
 	_souls_orb.texture = SOUL_ICON
@@ -453,7 +482,7 @@ func _on_xp(total_xp: float) -> void:
 	_xp_target = total_xp
 
 
-## Banked soul count changed — update the counter and pop the mote a touch.
+## Spendable soul count changed — update the counter and pop the mote a touch.
 func _on_souls(souls: int) -> void:
 	if _souls_count == null:
 		return
@@ -461,6 +490,22 @@ func _on_souls(souls: int) -> void:
 	_souls_orb.scale = Vector2(1.5, 1.5)
 	var tw := _souls_orb.create_tween()
 	tw.tween_property(_souls_orb, "scale", Vector2.ONE, 0.25).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+
+
+## Vault (uncollected souls) changed — update the violet counter; hide it while the vault is
+## empty so it only shows when there's something to chase down next wave.
+func _on_bank(banked: int) -> void:
+	if _bank_count == null:
+		return
+	_bank_count.text = str(banked)
+	var showing := banked > 0
+	_bank_orb.visible = showing
+	_bank_count.visible = showing
+	if not showing:
+		return
+	_bank_orb.scale = Vector2(1.4, 1.4)
+	var tw := _bank_orb.create_tween()
+	tw.tween_property(_bank_orb, "scale", Vector2.ONE, 0.25).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 
 
 ## Seed the animated bar from the current stats (level + lifetime XP), no animation.

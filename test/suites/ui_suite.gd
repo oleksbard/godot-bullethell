@@ -72,7 +72,7 @@ func _test_item_tooltip(t: TestContext) -> void:
 	t.ok(not shown.has("Piercing") and not shown.has("Ricochet"),
 		"zero-valued stats (Piercing/Ricochet) are hidden")
 	t.ok(shown.has("Magazine") and shown["Magazine"] == "7", "Magazine shows 7")
-	t.ok(shown.has("Reload") and shown["Reload"] == "2", "Reload shows as 2 (base pistol seconds)")
+	t.ok(shown.has("Reload") and shown["Reload"] == "1.5", "Reload shows as 1.5 (base pistol seconds)")
 
 	# Type + tags: pistol is a Gun and is tagged both Projectile and Gun.
 	t.ok(p.type_name() == "Gun", "pistol Type is Gun")

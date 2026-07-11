@@ -7,7 +7,8 @@ extends Node
 signal health_changed(health: float, max_health: float)
 signal xp_changed(total_xp: float)        # monotonic lifetime XP; the HUD animates the bar from it
 signal leveled_up(level: int)             # authoritative level event (the HUD fires the flourish/modal when its bar fills)
-signal souls_changed(souls: int)          # banked soul count changed (HUD + level-up menu show it)
+signal souls_changed(souls: int)          # spendable soul count changed (HUD + level-up menu show it)
+signal bank_changed(banked: int)          # vault of UNcollected souls changed (HUD shows it; re-drops next wave)
 signal damaged(amount: float)             # damage the player took this hit (CombatTracker tallies it)
 
 var max_health := 60.0
@@ -16,8 +17,9 @@ var level := 1
 var xp := 0.0
 var xp_to_next := 16.0                     # = xp_for(1); first level-up cost (Brotato curve)
 var total_xp := 0.0                       # never decreases; lets the HUD animate across level boundaries
-var souls := 0                            # currency banked from collected soul-motes; spent in the level-up shop
+var souls := 0                            # spendable currency from collected soul-motes; spent in the level-up shop
 var total_souls := 0                      # never decreases; lifetime souls collected (drives the shop reroll base)
+var banked_souls := 0                     # uncollected souls sent to the vault; re-dropped one-per-kill next wave (NOT spendable, not in the shop)
 var rarity_bonus := 0.0                   # "Increased Rarity" / Luck: flattens the shop's level-roll curve upward (0 for now; future upgrade)
 
 
@@ -66,6 +68,24 @@ func spend_souls(amount: int) -> bool:
 		return false
 	souls -= amount
 	souls_changed.emit(souls)
+	return true
+
+
+## Send uncollected souls to the vault (called at wave clear for every mote left on the
+## ground). They aren't spendable — they re-drop as bonus motes next wave, one per kill.
+func bank_souls(amount: int) -> void:
+	if amount <= 0:
+		return
+	banked_souls += amount
+	bank_changed.emit(banked_souls)
+
+
+## Pull one soul out of the vault for a bonus drop; returns whether there was one to pull.
+func draw_banked_soul() -> bool:
+	if banked_souls <= 0:
+		return false
+	banked_souls -= 1
+	bank_changed.emit(banked_souls)
 	return true
 
 
