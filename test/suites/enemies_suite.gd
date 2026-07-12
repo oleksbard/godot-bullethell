@@ -21,6 +21,7 @@ func run(t: TestContext) -> void:
 	await _test_wave_spawner(t)
 	await _test_imp_die(t)
 	await _test_gore_mixed(t)
+	await _test_gore_direction(t)
 	await _test_zombie(t)
 	await _test_imp_take_damage(t)
 	await _test_imp_take_damage_returns_killed(t)
@@ -106,6 +107,28 @@ func _test_gore_mixed(t: TestContext) -> void:
 	t.ok(t.nodes_in_group("gibs").size() - before == GoreScript.GIB_CAP,
 		"a huge gore_amount is capped at GIB_CAP (%d new)" % (t.nodes_in_group("gibs").size() - before))
 	await t.frame()
+	holder.free()
+
+
+## Every chunk is launched away from the blow (forward along hit_dir) and gets at least
+## SPEED_MIN of horizontal throw — so none spray back toward the player or pile on the corpse.
+func _test_gore_direction(t: TestContext) -> void:
+	t.suite = "Gore.direction"
+	var holder := Node3D.new()
+	t.root().add_child(holder)
+	await t.frame()
+	var fwd := Vector2(0.0, -1.0)                 # bolt travels -Z; chunks should fly -Z, away from the blow
+	GoreScript.spawn_death(holder, Vector3.ZERO, Color(1, 0, 0), 8, Vector3(0.0, 0.0, -1.0))
+	var all_forward := true
+	var all_thrown := true
+	for g in holder.get_children():               # only the chunks this burst spawned (not other tests')
+		var horiz := Vector2(g._vel.x, g._vel.z)
+		if horiz.dot(fwd) <= 0.0:
+			all_forward = false                   # went sideways-back / toward the player
+		if horiz.length() < GoreScript.SPEED_MIN - 0.01:
+			all_thrown = false                    # barely moved -> would pile
+	t.ok(all_forward, "every chunk is launched away from the blow (forward along hit_dir)")
+	t.ok(all_thrown, "every chunk gets >= SPEED_MIN horizontal throw (no pilers)")
 	holder.free()
 
 
@@ -702,6 +725,4 @@ func _test_speed_buff(t: TestContext) -> void:
 	var d_hasted := h0.distance_to(hasted.global_position)
 	t.ok(d_plain > 0.5, "the plain imp moved (%.2f)" % d_plain)
 	t.ok(d_hasted > d_plain * 1.4, "the hasted imp covered >1.4x the plain imp's distance (+60%% buff: %.2f vs %.2f)" % [d_hasted, d_plain])
-	holder.free()
-
 	holder.free()

@@ -8,6 +8,7 @@ extends Node3D
 const STRIP_SHADER := preload("res://src/fx/leap_telegraph.gdshader")
 
 const WIDTH := 0.7              # strip width (world units)
+const CHEVRON_LEN := 0.7       # world units per arrowhead — fixed so arrows keep one shape at any leap distance
 const Y_LIFT := 0.06           # float just above the ground (depth_test_disabled draws it over terrain anyway)
 const COLOR := Color(1.0, 0.35, 0.08)   # ember-orange, matches the imps' eyes
 const FIRE_TIME := 0.14        # white flash-out after launch, then free
@@ -30,6 +31,8 @@ func setup(from: Vector3, to: Vector3) -> void:
 	_strip_mat = ShaderMaterial.new()
 	_strip_mat.shader = STRIP_SHADER
 	_strip_mat.set_shader_parameter("color", Vector3(COLOR.r, COLOR.g, COLOR.b))
+	# One arrow per CHEVRON_LEN of world length -> arrows keep a constant shape regardless of leap distance.
+	_strip_mat.set_shader_parameter("chevrons", maxf(2.0, roundf(dist / CHEVRON_LEN)))
 	var plane := PlaneMesh.new()               # lies flat in XZ, faces +Y; UV.x runs along +X
 	plane.size = Vector2(dist, WIDTH)
 	var strip := MeshInstance3D.new()

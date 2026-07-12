@@ -21,8 +21,11 @@ void fragment() {
 	float saw = fract(x * chevrons - TIME * speed);
 	float chev = smoothstep(0.4, 0.95, saw);
 	float filled = step(UV.x, progress);              // only the charged part shows
+	// Soft-fade the last arrow at the player end so scrolling chevrons flow off cleanly
+	// instead of being hard-sliced by the quad edge ("cut out in the front").
+	float tip = smoothstep(1.0, 1.0 - 0.5 / chevrons, UV.x);
 	// Just the arrow chevrons on the charged part — no background track, no solid fill bar.
-	float a = band * chev * 0.9 * filled;
+	float a = band * chev * 0.9 * filled * tip;
 	a = clamp(a + flash * band, 0.0, 1.0);
 	vec3 c = mix(color, vec3(1.0), flash);
 	ALBEDO = c * (1.3 + flash * 3.0);                 // HDR -> blooms past glow_hdr_threshold
