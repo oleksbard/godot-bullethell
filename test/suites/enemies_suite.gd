@@ -7,8 +7,11 @@ const WaveSpawnerScript := preload("res://src/enemies/wave_spawner.gd")
 const ImpScript := preload("res://src/enemies/imp.gd")
 const GoreScript := preload("res://src/fx/gore.gd")
 const ZombieScript := preload("res://src/enemies/zombie.gd")
+const RevenantScript := preload("res://src/enemies/revenant.gd")
+const EnemyBoltScript := preload("res://src/fx/enemy_bolt.gd")
 const LeapCoordinatorScript := preload("res://src/enemies/leap_coordinator.gd")
 const BuffCoordinatorScript := preload("res://src/enemies/buff_coordinator.gd")
+const RevenantCoordinatorScript := preload("res://src/enemies/revenant_coordinator.gd")
 const PortalScript := preload("res://src/fx/portal.gd")
 const IslandShape := preload("res://src/lib/island_shape.gd")
 const GunScript := preload("res://src/weapons/gun.gd")
@@ -40,6 +43,37 @@ func run(t: TestContext) -> void:
 	_test_leap_coordinator(t)
 	_test_buff_coordinator(t)
 	await _test_speed_buff(t)
+	await _test_revenant(t)
+	_test_revenant_share(t)
+	await _test_enemy_bolt_only_hits_player(t)
+	await _test_revenant_fires(t)
+	await _test_revenant_repositions(t)
+	await _test_revenant_barrage_fan(t)
+	_test_revenant_coordinator(t)
+
+
+## Point cost of a spawned enemy, matching the spawner's budget (imp 1 / zombie 2 / revenant 3).
+func _cost_of(e: Node) -> int:
+	match e.enemy_type():
+		"Zombie": return WaveSpawnerScript.ZOMBIE_COST
+		"Revenant": return WaveSpawnerScript.REVENANT_COST
+		_: return 1
+
+
+## Pump the spawner until the current wave has spent its whole point budget.
+func _drain(sp: Node) -> void:
+	for _i in 600:
+		if sp._to_spawn <= 0:
+			return
+		sp._process(0.2)
+
+
+## Total point cost of every live enemy (should equal the wave's budget once drained).
+func _live_points(t: TestContext) -> int:
+	var points := 0
+	for e in t.nodes_in_group("imps"):
+		points += _cost_of(e)
+	return points
 
 
 func _test_wave_spawner(t: TestContext) -> void:
@@ -76,11 +110,12 @@ func _test_imp_die(t: TestContext) -> void:
 	t.ok(t.nodes_in_group("imps").has(imp), "imp registers in the 'imps' group")
 
 	var gibs_before := t.nodes_in_group("gibs").size()
-	imp.die(4)                                # killer passes the gore amount (its projectile type)
+	imp.die(4.0)                              # killer passes the blow's damage
 	t.ok(t.nodes_in_group("imps").size() == 0, "die() removes it from the target group")
-	# KILL_GIBS base chunks + the killer's gore_amount, all flying body parts (no decals).
-	t.ok(t.nodes_in_group("gibs").size() - gibs_before == GoreScript.KILL_GIBS + 4,
-		"die(n) throws KILL_GIBS + n chunks (%d new)" % (t.nodes_in_group("gibs").size() - gibs_before))
+	# Gib count scales with the killing damage (x KILL_GIBS_PER_DAMAGE); all flying body parts (no decals).
+	var expect_die := int(round(4.0 * GoreScript.KILL_GIBS_PER_DAMAGE))
+	t.ok(t.nodes_in_group("gibs").size() - gibs_before == expect_die,
+		"die(dmg) throws round(dmg x rate) chunks (%d new)" % (t.nodes_in_group("gibs").size() - gibs_before))
 	await t.frame()                       # let the queued free run
 	holder.free()                             # frees the gibs too
 
@@ -90,22 +125,24 @@ func _test_gore_mixed(t: TestContext) -> void:
 	var holder := Node3D.new()
 	t.root().add_child(holder)
 	await t.frame()
-	# Mixed gib colours: KILL_GIBS + amount chunks, tinted from the list.
+	# Mixed gib colours: round(damage x rate) chunks, tinted from the list.
 	var before := t.nodes_in_group("gibs").size()
-	GoreScript.spawn_death(holder, Vector3.ZERO, Color(1, 0, 0), 6, Vector3(0, 0, -1),
+	GoreScript.spawn_death(holder, Vector3.ZERO, Color(1, 0, 0), 6.0, Vector3(0, 0, -1),
 		[Color(1, 0, 0), Color(0, 1, 0)])
-	t.ok(t.nodes_in_group("gibs").size() - before == GoreScript.KILL_GIBS + 6,
-		"mixed death = KILL_GIBS + 6 chunks (%d new)" % (t.nodes_in_group("gibs").size() - before))
+	var expect6 := int(round(6.0 * GoreScript.KILL_GIBS_PER_DAMAGE))
+	t.ok(t.nodes_in_group("gibs").size() - before == expect6,
+		"mixed death = round(6 x rate) chunks (%d new)" % (t.nodes_in_group("gibs").size() - before))
 	# Empty colour list reproduces the single-tint path, same count.
 	before = t.nodes_in_group("gibs").size()
-	GoreScript.spawn_death(holder, Vector3.ZERO, Color(1, 0, 0), 4, Vector3(0, 0, -1))
-	t.ok(t.nodes_in_group("gibs").size() - before == GoreScript.KILL_GIBS + 4,
-		"default (empty list) = KILL_GIBS + 4 chunks (%d new)" % (t.nodes_in_group("gibs").size() - before))
-	# A runaway gore_amount is clamped to the per-burst ceiling.
+	GoreScript.spawn_death(holder, Vector3.ZERO, Color(1, 0, 0), 4.0, Vector3(0, 0, -1))
+	var expect4 := int(round(4.0 * GoreScript.KILL_GIBS_PER_DAMAGE))
+	t.ok(t.nodes_in_group("gibs").size() - before == expect4,
+		"default (empty list) = round(4 x rate) chunks (%d new)" % (t.nodes_in_group("gibs").size() - before))
+	# A runaway damage is clamped to the per-burst ceiling.
 	before = t.nodes_in_group("gibs").size()
-	GoreScript.spawn_death(holder, Vector3.ZERO, Color(1, 0, 0), 500)
+	GoreScript.spawn_death(holder, Vector3.ZERO, Color(1, 0, 0), 500.0)
 	t.ok(t.nodes_in_group("gibs").size() - before == GoreScript.GIB_CAP,
-		"a huge gore_amount is capped at GIB_CAP (%d new)" % (t.nodes_in_group("gibs").size() - before))
+		"a huge damage is capped at GIB_CAP (%d new)" % (t.nodes_in_group("gibs").size() - before))
 	await t.frame()
 	holder.free()
 
@@ -146,8 +183,9 @@ func _test_imp_take_damage(t: TestContext) -> void:
 	var gibs_before := t.nodes_in_group("gibs").size()
 	imp.take_damage(GunScript.DAMAGE)             # one 5-dmg bolt — not enough vs 6 HP
 	t.ok(t.nodes_in_group("imps").has(imp), "6-HP imp survives a single 5-dmg bolt")
-	t.ok(t.nodes_in_group("gibs").size() - gibs_before == GoreScript.HIT_GIBS,
-		"a non-lethal hit sprays HIT_GIBS chunks (%d new)" % (t.nodes_in_group("gibs").size() - gibs_before))
+	var expect_hit := int(round(GunScript.DAMAGE * GoreScript.HIT_GIBS_PER_DAMAGE))
+	t.ok(t.nodes_in_group("gibs").size() - gibs_before == expect_hit,
+		"a non-lethal hit sprays round(dmg x rate) chunks (%d new)" % (t.nodes_in_group("gibs").size() - gibs_before))
 	imp.take_damage(GunScript.DAMAGE)             # second bolt finishes it (10 >= 6)
 	t.ok(t.nodes_in_group("imps").size() == 0, "second bolt drops it (HP <= 0 -> die)")
 
@@ -176,11 +214,11 @@ func _test_knockback_falloff(t: TestContext) -> void:
 
 	# Three knockbacks with no _process between them -> the window stays open and the
 	# falloff escalates: full, -50%, -100%.
-	imp.take_damage(2.0, 1, dir)
+	imp.take_damage(2.0, dir)
 	var k1: float = imp._knock.length()
-	imp.take_damage(2.0, 1, dir)
+	imp.take_damage(2.0, dir)
 	var k2: float = imp._knock.length()
-	imp.take_damage(2.0, 1, dir)
+	imp.take_damage(2.0, dir)
 	var k3: float = imp._knock.length()
 	t.ok(k1 > 0.1, "1st knockback in the window is full (%.2f)" % k1)
 	t.ok(is_equal_approx(k2, k1 * 0.5), "2nd knockback is halved (%.2f vs %.2f)" % [k2, k1])
@@ -190,7 +228,7 @@ func _test_knockback_falloff(t: TestContext) -> void:
 	# just decays the window and returns (no movement).
 	imp.player = null
 	imp._process(ImpScript.KB_WINDOW + 0.1)
-	imp.take_damage(2.0, 1, dir)
+	imp.take_damage(2.0, dir)
 	t.ok(is_equal_approx(imp._knock.length(), k1),
 		"knockback resets to full after a >5s lull (%.2f)" % imp._knock.length())
 	holder.free()
@@ -227,7 +265,7 @@ func _test_imp_hit_react(t: TestContext) -> void:
 	await t.frame()                            # _ready builds the model + _anim_mats
 	imp.global_position = Vector3(5.0, 0.0, 0.0)
 
-	imp.take_damage(2.0, 1, Vector3(1.0, 0.0, 0.0))   # non-lethal, bolt travelling +X
+	imp.take_damage(2.0, Vector3(1.0, 0.0, 0.0))   # non-lethal, bolt travelling +X
 	t.ok(not imp._dead, "a non-lethal hit doesn't kill")
 	t.ok(imp._knock.x > 0.1, "hit shoves the imp along the bolt's travel (knockback)")
 	t.ok(imp._slow > 0.0 and imp._hit_flash > 0.0, "hit triggers a brief slow + flash")
@@ -340,8 +378,8 @@ func _test_wave_progression(t: TestContext) -> void:
 	holder.add_child(sp.player)
 	holder.add_child(sp)                      # _ready -> starts dripping in wave 1
 
-	t.pump_spawn(sp, 32)
-	t.ok(t.nodes_in_group("imps").size() == 32, "wave 1 drips in to 32 imps (got %d)" % t.nodes_in_group("imps").size())
+	_drain(sp)                                # spawn all of wave 1 (points, not headcount — revenants cost 3)
+	t.ok(_live_points(t) == 32, "wave 1 spends its 32-point budget (got %d)" % _live_points(t))
 	var w1_interval: float = sp._spawn_interval
 
 	for imp in t.nodes_in_group("imps"):
@@ -352,14 +390,8 @@ func _test_wave_progression(t: TestContext) -> void:
 	sp._process(WaveSpawnerScript.WAVE_DELAY + 0.1) # breather elapses -> next wave begins
 	var budget: int = sp._to_spawn            # wave 2 = 38 points
 	t.ok(budget == 38, "wave 2 budget climbs by +6 to 38 (got %d)" % budget)
-	for _i in 600:
-		if sp._to_spawn <= 0:
-			break
-		sp._process(0.2)
-	var points := 0
-	for e in t.nodes_in_group("imps"):
-		points += WaveSpawnerScript.ZOMBIE_COST if e.enemy_type() == "Zombie" else 1
-	t.ok(points == budget, "wave 2 spends exactly its budget in points (%d == %d)" % [points, budget])
+	_drain(sp)
+	t.ok(_live_points(t) == budget, "wave 2 spends exactly its budget in points (%d == %d)" % [_live_points(t), budget])
 	t.ok(sp._spawn_interval < w1_interval,
 		"wave 2 drips faster than wave 1 (%.2f < %.2f s)" % [sp._spawn_interval, w1_interval])
 
@@ -384,7 +416,7 @@ func _test_zombie_budget(t: TestContext) -> void:
 	sp.player = Node3D.new()
 	holder.add_child(sp.player)
 	holder.add_child(sp)                          # _ready -> wave 1
-	t.pump_spawn(sp, 32)
+	_drain(sp)                                    # spawn all of wave 1
 	var w1_zombies := 0
 	for e in t.nodes_in_group("imps"):
 		if e.enemy_type() == "Zombie":
@@ -398,21 +430,15 @@ func _test_zombie_budget(t: TestContext) -> void:
 	for _i in 6:
 		sp._start_wave()                          # _ready already started wave 1, so these bump _wave 2..7
 	var budget: int = sp._to_spawn
-	for _i in 600:
-		if sp._to_spawn <= 0:
-			break
-		sp._process(0.2)
+	_drain(sp)
 	t.ok(sp._to_spawn <= 0, "the wave drains its point budget")
-	var imps := 0
 	var zoms := 0
 	for e in t.nodes_in_group("imps"):
 		if e.enemy_type() == "Zombie":
 			zoms += 1
-		else:
-			imps += 1
 	t.ok(zoms > 0, "a deep wave mixes in zombies (got %d)" % zoms)
-	t.ok(imps + WaveSpawnerScript.ZOMBIE_COST * zoms == budget,
-		"imp(1) + zombie(2) points equal the budget (%d, want %d)" % [imps + WaveSpawnerScript.ZOMBIE_COST * zoms, budget])
+	t.ok(_live_points(t) == budget,
+		"imp(1) + zombie(2) + revenant(3) points equal the budget (%d, want %d)" % [_live_points(t), budget])
 	await t.frame()
 	holder.free()
 
@@ -468,21 +494,26 @@ func _test_wave_signals(t: TestContext) -> void:
 	var started := [0]
 	var spawned := [0]
 	var cleared := [0]
-	var first_xp := [-1.0]
+	var first_enemy: Array[Node] = [null]
 	sp.wave_started.connect(func(w: int) -> void: started[0] = w)
 	sp.imp_spawned.connect(func(imp: Node) -> void:
 		spawned[0] += 1
-		if first_xp[0] < 0.0:
-			first_xp[0] = imp.xp_value)
+		if first_enemy[0] == null:
+			first_enemy[0] = imp)
 	sp.wave_cleared.connect(func() -> void: cleared[0] += 1)
 
 	holder.add_child(sp)                              # _ready -> _start_wave() -> wave_started(1)
 	t.ok(started[0] == 1, "wave_started fires with wave 1 on ready (got %d)" % started[0])
 
-	t.pump_spawn(sp, 32)
-	t.ok(spawned[0] == 32, "imp_spawned fires once per spawned imp (got %d)" % spawned[0])
-	t.ok(is_equal_approx(first_xp[0], ImpScript.BASE_XP),
-		"a wave-1 imp carries BASE_XP (%.1f)" % first_xp[0])
+	_drain(sp)                                        # spawn all of wave 1
+	t.ok(spawned[0] == t.nodes_in_group("imps").size(),
+		"imp_spawned fires once per spawned enemy (%d signals, %d live)" % [spawned[0], t.nodes_in_group("imps").size()])
+	var fe: Node = first_enemy[0]
+	var base_xp := ImpScript.BASE_XP
+	if fe != null and fe.enemy_type() == "Zombie": base_xp = ZombieScript.BASE_XP
+	elif fe != null and fe.enemy_type() == "Revenant": base_xp = RevenantScript.BASE_XP
+	t.ok(fe != null and is_equal_approx(fe.xp_value, base_xp),
+		"a wave-1 enemy carries its un-scaled BASE_XP (%.1f, want %.1f)" % [fe.xp_value if fe != null else -1.0, base_xp])
 
 	for imp in t.nodes_in_group("imps"):
 		imp.die()
@@ -725,4 +756,209 @@ func _test_speed_buff(t: TestContext) -> void:
 	var d_hasted := h0.distance_to(hasted.global_position)
 	t.ok(d_plain > 0.5, "the plain imp moved (%.2f)" % d_plain)
 	t.ok(d_hasted > d_plain * 1.4, "the hasted imp covered >1.4x the plain imp's distance (+60%% buff: %.2f vs %.2f)" % [d_hasted, d_plain])
+	holder.free()
+
+
+## Count EnemyBolt children under a holder (bolts add themselves to the firer's parent).
+func _count_bolts(holder: Node) -> int:
+	var n := 0
+	for c in holder.get_children():
+		if c.get_script() == EnemyBoltScript:
+			n += 1
+	return n
+
+
+## A minimal stand-in player: records the damage it takes (the bolt/melee victim).
+class StubPlayer extends Node3D:
+	var hits := 0
+	var total := 0.0
+	func take_damage(amount: float) -> void:
+		hits += 1
+		total += amount
+
+
+## The ranged elite: joins the group, reports its type, and is tuned to fight at range
+## (fires from beyond where it stops) with only the barrage special.
+func _test_revenant(t: TestContext) -> void:
+	t.suite = "Revenant"
+	var holder := Node3D.new()
+	t.root().add_child(holder)
+	var r: Node3D = RevenantScript.new()
+	holder.add_child(r)
+	await t.frame()                                  # _ready -> _configure + model
+	t.ok(t.nodes_in_group("imps").has(r), "revenant joins the 'imps' target group")
+	t.ok(r.enemy_type() == "Revenant", "revenant reports its type for the recap")
+	t.ok(r.can_special_barrage and not r.can_special_leap and not r.can_special_buff,
+		"revenant has only the barrage special (no leap, no buff)")
+	t.ok(r.attack_range > r.stop_dist, "revenant fires from beyond where it stops (ranged, not melee)")
+
+	var i: Node3D = ImpScript.new()
+	holder.add_child(i)
+	await t.frame()
+	t.ok(r.attack_range > i.attack_range, "revenant attacks from much farther than an imp (%.1f > %.1f)" % [r.attack_range, i.attack_range])
+	holder.free()
+
+
+## Revenant share: nonzero from wave 1 (present immediately), climbs, capped. Pure function.
+func _test_revenant_share(t: TestContext) -> void:
+	t.suite = "WaveSpawner.revenant"
+	var sp0: Node3D = WaveSpawnerScript.new()
+	t.ok(sp0._revenant_share(1) > 0.0, "revenants appear from wave 1 (share %.2f)" % sp0._revenant_share(1))
+	t.ok(sp0._revenant_share(5) > sp0._revenant_share(1), "the revenant share climbs with the wave")
+	t.ok(is_equal_approx(sp0._revenant_share(99), WaveSpawnerScript.REVENANT_SHARE_CAP),
+		"the revenant share is capped (%.2f)" % sp0._revenant_share(99))
+	sp0.free()
+
+
+## The enemy bolt damages the PLAYER and passes through other enemies unharmed — the core
+## "revenant bullets only hurt the player" contract.
+func _test_enemy_bolt_only_hits_player(t: TestContext) -> void:
+	t.suite = "EnemyBolt"
+	var holder := Node3D.new()
+	t.root().add_child(holder)
+	var player := StubPlayer.new()
+	holder.add_child(player)                         # at the origin — the bolt's target
+
+	var bystander: Node3D = ImpScript.new()
+	bystander.max_hp = 100.0
+	bystander.hp = 100.0
+	holder.add_child(bystander)
+	await t.frame()
+	bystander.global_position = Vector3(0.0, 0.0, -1.5)   # sits directly on the bolt's path
+
+	var bolt: Node3D = EnemyBoltScript.new()
+	bolt.player = player
+	bolt.damage = 5.0
+	holder.add_child(bolt)
+	bolt.global_position = Vector3(0.0, 0.0, -3.0)   # flies +Z toward the player, crossing the imp
+
+	for _i in 60:
+		if not is_instance_valid(bolt):
+			break
+		bolt._process(0.05)
+	t.ok(player.hits >= 1 and is_equal_approx(player.total, 5.0), "the enemy bolt damages the player (%.1f)" % player.total)
+	t.ok(is_instance_valid(bystander) and is_equal_approx(bystander.hp, 100.0),
+		"the enemy bolt passes through enemies unharmed (imp HP %.0f, untouched)" % bystander.hp)
+	holder.free()
+
+
+## A revenant in firing range looses bolts at the player on its cooldown (the ranged attack).
+func _test_revenant_fires(t: TestContext) -> void:
+	t.suite = "Revenant.fire"
+	var holder := Node3D.new()
+	t.root().add_child(holder)
+	var player := StubPlayer.new()
+	holder.add_child(player)                         # at the origin
+	var r: Node3D = RevenantScript.new()
+	r.player = player
+	r.max_hp = 100.0
+	r.hp = 100.0
+	holder.add_child(r)
+	await t.frame()
+	r.global_position = Vector3(0.0, 0.0, 10.0)      # within attack_range (13), beyond stop_dist (9)
+
+	var before := _count_bolts(holder)
+	for _i in 40:
+		r._process(0.1)                              # 4s > attack_cooldown 2.5 -> at least one shot
+	t.ok(_count_bolts(holder) - before >= 1, "a revenant in range fires bolts at the player (%d)" % (_count_bolts(holder) - before))
+	holder.free()
+
+
+## After its shot quota the revenant strafes to a new spot (a moving target, not a turret).
+func _test_revenant_repositions(t: TestContext) -> void:
+	t.suite = "Revenant.reposition"
+	var holder := Node3D.new()
+	t.root().add_child(holder)
+	var player := StubPlayer.new()
+	holder.add_child(player)
+	var r: Node3D = RevenantScript.new()
+	r.player = player
+	r.max_hp = 100.0
+	r.hp = 100.0
+	holder.add_child(r)
+	await t.frame()
+	r.global_position = Vector3(0.0, 0.0, 10.0)
+
+	r._shots_before_move = 2
+	r._shots_since_move = 0
+	r._attack_player()
+	r._attack_player()                               # hit the quota -> trigger a reposition
+	t.ok(r._reposition_t > 0.0, "after its shot quota the revenant kicks off a reposition")
+	var p0: Vector3 = r.global_position
+	for _i in 6:
+		r._process(0.1)
+	t.ok(r.global_position.distance_to(p0) > 0.2, "the reposition actually moves it (%.2f)" % r.global_position.distance_to(p0))
+	holder.free()
+
+
+## The barrage special looses a fan of exactly BARRAGE_COUNT bolts, then ends.
+func _test_revenant_barrage_fan(t: TestContext) -> void:
+	t.suite = "Revenant.barrage"
+	var holder := Node3D.new()
+	t.root().add_child(holder)
+	var player := StubPlayer.new()
+	holder.add_child(player)
+	var r: Node3D = RevenantScript.new()
+	r.player = player
+	holder.add_child(r)
+	await t.frame()
+	r.global_position = Vector3(0.0, 0.0, 10.0)
+
+	t.ok(r.can_barrage(), "an idle revenant can be told to barrage")
+	r.begin_barrage()
+	t.ok(r.is_barraging(), "begin_barrage puts it into the rooted barrage state")
+	var before := _count_bolts(holder)
+	for _i in 20:
+		r._process(0.1)                              # 2s: wind-up (0.6) + fire + recovery (0.4)
+	t.ok(_count_bolts(holder) - before == RevenantScript.BARRAGE_COUNT,
+		"the barrage looses a fan of BARRAGE_COUNT bolts (%d)" % (_count_bolts(holder) - before))
+	t.ok(not r.is_barraging(), "the barrage ends after firing + recovery")
+	holder.free()
+
+
+## A minimal stand-in revenant for the coordinator: lives in group "imps", reports barrage
+## state, and records begin_barrage() — no model/AI, so the gate logic tests fast.
+class StubRevenant extends Node3D:
+	var barraging := false
+	var began := false
+	var can_special_barrage := true
+	func can_barrage() -> bool: return not barraging
+	func is_barraging() -> bool: return barraging
+	func begin_barrage() -> void:
+		began = true
+		barraging = true
+
+
+## The global barrage gate: one at a time, on cooldown, the nearest eligible revenant chosen,
+## non-barragers skipped. Drives _process directly — deterministic, no real frames.
+func _test_revenant_coordinator(t: TestContext) -> void:
+	t.suite = "RevenantCoordinator"
+	var holder := Node3D.new()
+	t.root().add_child(holder)
+	var player := Node3D.new()
+	holder.add_child(player)                         # at the origin
+
+	var far := StubRevenant.new(); far.position = Vector3(20, 0, 0)
+	var near := StubRevenant.new(); near.position = Vector3(5, 0, 0)
+	var nonbarr := StubRevenant.new(); nonbarr.position = Vector3(2, 0, 0); nonbarr.can_special_barrage = false  # nearest, but opts out
+	for s in [far, near, nonbarr]:
+		s.add_to_group("imps")
+		holder.add_child(s)
+
+	var coord := RevenantCoordinatorScript.new()
+	coord.player = player
+	holder.add_child(coord)
+	coord._cooldown = 0.0                            # skip the start grace
+
+	coord._process(0.016)
+	t.ok(near.began and not far.began, "the nearest eligible revenant barrages")
+	t.ok(not nonbarr.began, "a non-barrager (can_special_barrage=false) is skipped even when nearest")
+	t.ok(coord._active == near, "the coordinator holds it as the single active barrager")
+
+	coord._process(0.016)
+	t.ok(not far.began, "no second barrage starts while one is active")
+
+	near.barraging = false                           # simulate the barrage finishing
+	coord._process(0.016)
+	t.ok(coord._active == null and coord._cooldown > 0.0, "a finished barrage releases the token and re-arms the cooldown")
 	holder.free()

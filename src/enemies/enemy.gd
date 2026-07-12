@@ -50,6 +50,13 @@ const BUFF_RANGE := 6.0           # enemies within this of the caster get hasted
 const BUFF_MULT := 1.6            # +60% move speed
 const BUFF_DURATION := 12.0       # seconds the speed buff lasts on each recipient
 
+# Barrage special (revenant) — stand still, wind up, then loose a fan of bolts at the player.
+# The RevenantCoordinator grants one at a time (a global cooldown) and tells the chosen
+# revenant to begin_barrage(). Only revenants barrage (can_special_barrage); the actual
+# volley is fired by the subclass in _release_barrage(). See revenant_coordinator.gd.
+const BARRAGE_WINDUP := 0.6       # seconds the revenant coils before firing (telegraph window)
+const BARRAGE_RECOVER := 0.4      # seconds rooted after firing before it moves again
+
 # --- spawner-set combat numbers (the spawner writes these after new(), before _ready) ---
 var player: Node3D
 var obstacles: ObstacleFieldScript   # island columns/lava/rocks; set by the spawner
@@ -68,14 +75,22 @@ var stop_dist := 0.8
 var sep_radius := 1.2
 var sep_weight := 1.6
 var body_color := Color(0.45, 0.08, 0.08)   # gib/blood tint + albedo fallback when the model has no texture
-var body_tint := Color(1.0, 1.0, 1.0)       # multiplies the textured model albedo (white = untinted); subclass shifts it
-var tint_mix := 0.0                          # 0 = keep the texture; 1 = flat body_tint (lerps past a dark texture)
+var body_tint := Color(0.72, 0.16, 0.12)    # multiplies the textured model albedo; base = the imp's blood-red read
+var tint_mix := 0.25                         # 0 = keep the texture; 1 = flat body_tint (lerps past a dark texture)
+# Per-type signature colour added to EMISSION (see imp_anim.gdshader). The scene's hot orange
+# key light washes every enemy's albedo to the same yellow; this steady self-lit tint keeps each
+# type readable — strongest on the shadow side where lighting can't. Kept dim (< glow threshold)
+# so it colours the body without blooming. Base = imp's dark ember-red; subclass overrides.
+var body_emission := Color(0.55, 0.06, 0.03)
+var body_glow := 0.2
 var emerge_scale_from := 0.2
 var model_height := 1.3          # model auto-scaled so its height = this
 var model_yaw := PI              # turns model-forward to face the player (-Z)
 var attack_range := 1.4
 var attack_smooth := 6.0
 var attack_cooldown := 0.8
+var uses_melee_pose := true      # play the melee lunge/jab pose when in range. RANGED enemies set false so
+                                 # the walk gait keeps animating (else a big attack_range pins attack=1 -> frozen)
 var death_time := 0.4
 var dmg_number_color := Color(1.0, 0.95, 0.7)
 var eye_x_frac := 0.20
@@ -101,6 +116,7 @@ var lunge_rate := 1.8
 var lunge_reach := 0.45
 var can_special_leap := true     # this enemy type may be picked for the charged pounce (imp = yes; zombie opts out)
 var can_special_buff := false    # this enemy type may be picked for the AoE haste channel (zombie = yes)
+var can_special_barrage := false # this enemy type may be picked for the rooted bolt-volley (revenant = yes)
 
 # --- internal state ---
 var _attack_cd := 0.0
@@ -134,6 +150,11 @@ var _buff_t := 0.0               # seconds left of a received speed buff
 var _buff_mult := 1.0            # current speed multiplier while _buff_t > 0
 var _aura: Node3D = null         # the cast-aura FX while channelling
 
+# Barrage special — the revenant's rooted volley (wind-up -> fire -> recover).
+var _barraging := false          # this (revenant) is standing still, winding up / firing the volley
+var _barrage_t := 0.0            # seconds left in the current barrage phase
+var _barrage_fired := false      # the volley has been loosed (now in the recovery phase)
+
 
 func _ready() -> void:
 	_configure()
@@ -157,13 +178,31 @@ func enemy_type() -> String:
 	return "Enemy"
 
 
-## Subclass hook: the death gore. Default = a single-tint chunk burst (the imp's).
-func _spawn_gore(gore_amount: int, hit_dir: Vector3) -> void:
-	Gore.spawn_death(get_parent(), global_position, body_color, gore_amount, hit_dir)
+## Subclass hook: the death gore. Default = a single-tint chunk burst (the imp's), its
+## size scaled by the killing blow's `damage`.
+func _spawn_gore(damage: float, hit_dir: Vector3) -> void:
+	Gore.spawn_death(get_parent(), global_position, body_color, damage, hit_dir)
 
 
-## Killed by a projectile: leave gore, drop out of the target group, vanish.
-func die(gore_amount: int = 3, hit_dir: Vector3 = Vector3.ZERO) -> void:
+## Subclass hook: deliver this enemy's attack when in range and off cooldown. Default =
+## instant melee (imp/zombie). Ranged enemies (Revenant) override to fire a projectile.
+func _attack_player() -> void:
+	if player != null and player.has_method("take_damage"):
+		player.take_damage(attack_damage)
+
+
+## Subclass hook: the horizontal steering intent toward/away from the player each frame,
+## BEFORE swarm separation is added. Default = chase until stop_dist, then hold (melee).
+## Ranged enemies override to hold at firing range and occasionally backpedal.
+func _steer_intent(to_player: Vector3, _delta: float) -> Vector3:
+	if to_player.length() > stop_dist:
+		return to_player.normalized()
+	return Vector3.ZERO
+
+
+## Killed by a projectile: leave gore (scaled by the killing `damage`), drop out of the
+## target group, vanish.
+func die(damage: float = 5.0, hit_dir: Vector3 = Vector3.ZERO) -> void:
 	if _dead:
 		return                          # guard: two bolts can land the same frame
 	_dead = true
@@ -175,7 +214,7 @@ func die(gore_amount: int = 3, hit_dir: Vector3 = Vector3.ZERO) -> void:
 		_aura = null
 	remove_from_group(GROUP)
 	died.emit(global_position, xp_value, soul_value)
-	_spawn_gore(gore_amount, hit_dir)
+	_spawn_gore(damage, hit_dir)
 	_spawn_corpse()
 	queue_free()
 
@@ -203,7 +242,8 @@ func _spawn_corpse() -> void:
 
 
 ## Take `amount` damage; dies (with gore) at <= 0 HP, else survives. Returns true if lethal.
-func take_damage(amount: float, gore_amount: int = 3, hit_dir: Vector3 = Vector3.ZERO) -> bool:
+## The gib count scales with `amount`, so weak hits gib less than heavy ones.
+func take_damage(amount: float, hit_dir: Vector3 = Vector3.ZERO) -> bool:
 	if _dead:
 		return false
 	if is_instance_valid(_dmg_number):
@@ -212,9 +252,9 @@ func take_damage(amount: float, gore_amount: int = 3, hit_dir: Vector3 = Vector3
 		_dmg_number = DamageNumberScript.spawn(get_parent(), global_position + Vector3(0.0, model_height * 0.9, 0.0), amount, dmg_number_color)
 	hp -= amount
 	if hp <= 0.0:
-		die(gore_amount, hit_dir)
+		die(amount, hit_dir)
 		return true
-	Gore.spawn_hit(get_parent(), global_position, body_color, hit_dir)
+	Gore.spawn_hit(get_parent(), global_position, body_color, amount, hit_dir)
 	_react_to_hit(hit_dir)
 	return false
 
@@ -399,6 +439,54 @@ func apply_speed_buff(mult: float, duration: float) -> void:
 	_buff_t = maxf(_buff_t, duration)
 
 
+# --- Barrage special (revenant fan-of-bolts) — the RevenantCoordinator's handle -----------
+
+## Eligible to be told to barrage: alive, fully emerged, not leaping/channelling/barraging.
+func can_barrage() -> bool:
+	return not _dead and _emerge <= 0.0 and _leap_state == LeapState.NORMAL and not _channeling and not _barraging
+
+
+## True while winding up or recovering — the coordinator holds its single token until this clears.
+func is_barraging() -> bool:
+	return _barraging
+
+
+## Start the rooted wind-up. _process_barrage() fires _release_barrage() at the climax.
+func begin_barrage() -> void:
+	_barraging = true
+	_barrage_t = BARRAGE_WINDUP
+	_barrage_fired = false
+	_attack = 0.0
+	_set_anim("attack", 0.0)
+
+
+## Rooted: wind up (coil + face player) -> loose the volley -> brief recovery -> release token.
+func _process_barrage(delta: float) -> void:
+	_barrage_t -= delta
+	if player != null:
+		var d := player.global_position - global_position
+		d.y = 0.0
+		if d.length() > 0.05:
+			rotation.y = atan2(-d.x, -d.z)     # face the player while coiling/firing
+	if not _barrage_fired:
+		var p := 1.0 - clampf(_barrage_t / BARRAGE_WINDUP, 0.0, 1.0)   # 0 -> 1 wind-up
+		_set_anim("charge", p * 0.5)                                    # coil (reuse the leap crouch pose)
+		if _barrage_t <= 0.0:
+			_release_barrage()
+			_barrage_fired = true
+			_barrage_t = BARRAGE_RECOVER
+	else:
+		_set_anim("charge", clampf(_barrage_t / BARRAGE_RECOVER, 0.0, 1.0) * 0.5)
+		if _barrage_t <= 0.0:
+			_barraging = false
+			_set_anim("charge", 0.0)
+
+
+## Subclass hook: loose the actual volley (default no-op). The revenant fires a fan of bolts.
+func _release_barrage() -> void:
+	pass
+
+
 func _process(delta: float) -> void:
 	if _dead:
 		return
@@ -415,6 +503,9 @@ func _process(delta: float) -> void:
 
 	if _channeling:                           # zombie casting the AoE buff -> rooted
 		_process_channel(delta)
+		return
+	if _barraging:                            # revenant winding up / firing its volley -> rooted
+		_process_barrage(delta)
 		return
 	_update_landing_squash(delta)
 	if _leap_state != LeapState.NORMAL:       # charging or airborne -> the leap owns movement
@@ -433,10 +524,9 @@ func _process(delta: float) -> void:
 	if _slow > 0.0:
 		_slow -= delta
 		spd *= hit_slow_factor
-	var steer := Vector3.ZERO
-	if to_player.length() > stop_dist:
-		steer += to_player.normalized()
+	var steer := _steer_intent(to_player, delta)
 	steer += _separation() * sep_weight
+	var before := global_position
 	if steer.length() > 0.001:
 		global_position += steer.normalized() * spd * delta
 	if _knock.length() > 0.001:
@@ -445,18 +535,26 @@ func _process(delta: float) -> void:
 	_clamp_to_island()
 	if obstacles != null:
 		global_position = obstacles.resolve(global_position, body_radius, IslandShape.surface_height(global_position.x, global_position.z))
+		# ponytail: the chase vector alone pins bodies to the near face of a blocker. If
+		# resolve ate our step, slide along the wall (fixed per-enemy handedness) so it
+		# rounds the rock instead of getting stuck off-screen. add a stuck-timer + teleport
+		# fallback only if concave two-rock pockets still trap them.
+		var wanted := spd * delta
+		if wanted > 0.001 and global_position.distance_to(before) < wanted * 0.5:
+			var side := 1.0 if (get_instance_id() & 1) else -1.0
+			var perp := Vector3(-to_player.z, 0.0, to_player.x).normalized() * side
+			global_position = obstacles.resolve(before + perp * wanted, body_radius, IslandShape.surface_height(before.x, before.z))
 	if to_player.length() > 0.05:
 		rotation.y = atan2(-to_player.x, -to_player.z)   # face the player (-Z forward)
 	var in_range := to_player.length() <= attack_range
-	var want_attack := 1.0 if in_range else 0.0
+	var want_attack := 1.0 if (in_range and uses_melee_pose) else 0.0
 	_attack = move_toward(_attack, want_attack, delta * attack_smooth)
 	for m in _anim_mats:
 		m.set_shader_parameter("attack", _attack)
 	_attack_cd -= delta
 	if in_range and _attack_cd <= 0.0:
 		_attack_cd = attack_cooldown
-		if player.has_method("take_damage"):
-			player.take_damage(attack_damage)
+		_attack_player()
 
 
 ## Keep the enemy inside the coastline so it can't chase (or get knocked) onto the void.
@@ -537,6 +635,8 @@ func _build_model() -> void:
 		mat.set_shader_parameter("eye_radius", eye_radius)
 		mat.set_shader_parameter("eye_emission", Vector3(eye_color.r, eye_color.g, eye_color.b))
 		mat.set_shader_parameter("eye_energy", eye_energy)
+		mat.set_shader_parameter("body_emission", Vector3(body_emission.r, body_emission.g, body_emission.b))
+		mat.set_shader_parameter("body_glow", body_glow)
 		mesh_inst.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		mesh_inst.material_override = mat
 		_anim_mats.append(mat)

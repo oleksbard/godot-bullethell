@@ -58,6 +58,13 @@ uniform float eye_softness = 0.05;
 uniform vec3  eye_emission : source_color = vec3(1.0, 0.6, 0.15);
 uniform float eye_energy = 3.0;     // > glow_hdr_threshold so the eyes bloom
 
+// Per-type body accent: a steady signature colour added to EMISSION so each enemy holds its
+// identity under the scene's hot orange key light — which otherwise relights every type to the
+// same washed-out yellow. Kept dim (below the glow HDR threshold) so it TINTS the body without
+// blooming into a neon blob. enemy.gd sets it per subclass; fades out on death.
+uniform vec3  body_emission : source_color = vec3(0.0);
+uniform float body_glow = 0.0;
+
 varying vec3 v_obj;                  // original (pre-deform) object position, for the eye mask
 
 void vertex() {
@@ -158,6 +165,7 @@ void fragment() {
 
 	EMISSION = vec3(1.0, 0.92, 0.85) * clamp(hit, 0.0, 1.0) * 1.2;   // white pop when hit
 	EMISSION += eye_emission * eye_energy * glow;                    // demon eyes
+	EMISSION += body_emission * body_glow * (1.0 - clamp(death, 0.0, 1.0));   // per-type signature tint (wash-proof)
 	// Casting: a pulsing electric-cyan summon glow over the whole body (the channelling zombie).
 	EMISSION += vec3(0.4, 0.85, 1.0) * clamp(cast, 0.0, 1.0) * (1.5 + 1.5 * sin(TIME * 10.0));
 	// Buffed: a steadier energized cyan rim so you can tell at a glance who's hasted.

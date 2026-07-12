@@ -29,6 +29,7 @@ func _configure() -> void:
 	body_color = Color(0.22, 0.34, 0.12)    # rotten flesh — tints non-lethal hit gibs
 	body_tint = Color(0.30, 0.80, 0.18)     # saturated toxic-green — tune hue by eye
 	tint_mix = 0.65                          # blend most of the way to flat green so it reads past the dark texture
+	body_emission = Color(0.06, 0.30, 0.05)  # dim toxic-green self-light — holds the green in shadow under the orange key
 	dmg_number_color = Color(0.7, 1.0, 0.6)
 	eye_color = Color(0.5, 1.0, 0.3)         # sickly green
 	eye_energy = 2.2
@@ -55,6 +56,6 @@ func enemy_type() -> String:
 
 ## Heavy red+green death burst: ~3x the chunks of a normal kill, mixing crimson and
 ## toxic-green gib colours.
-func _spawn_gore(gore_amount: int, hit_dir: Vector3) -> void:
+func _spawn_gore(damage: float, hit_dir: Vector3) -> void:
 	Gore.spawn_death(get_parent(), global_position, body_color,
-		gore_amount * GORE_VOLUME_MULT, hit_dir, [GIB_RED, GIB_GREEN])
+		damage, hit_dir, [GIB_RED, GIB_GREEN], GORE_VOLUME_MULT)

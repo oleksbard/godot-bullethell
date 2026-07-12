@@ -19,9 +19,11 @@ const GunModsScript := preload("res://src/weapons/gun_mods.gd")
 const RecapViewScript := preload("res://src/ui/recap_view.gd")
 const WaveStatsScript := preload("res://src/stats/wave_stats.gd")
 const CombatTrackerScript := preload("res://src/stats/combat_tracker.gd")
+const TitleMeshScript := preload("res://src/lib/title_mesh.gd")
 
 
 func run(t: TestContext) -> void:
+	_test_title_mesh(t)
 	_test_item_tooltip(t)
 	_test_grid_view(t)
 	_test_grid_view_colors(t)
@@ -45,6 +47,23 @@ func run(t: TestContext) -> void:
 	await _test_shop_reroll(t)
 	await _test_recap_view(t)
 	await _test_wave_menu_recap(t)
+
+
+## The molten title generator emits a single-surface mesh with real 3D bounds and a
+## baked heat colour on every vertex, and shrugs off empty input.
+func _test_title_mesh(t: TestContext) -> void:
+	t.suite = "TitleMesh"
+	var mesh := TitleMeshScript.build("HELL\nMARINE")
+	t.ok(mesh is ArrayMesh and mesh.get_surface_count() == 1, "build returns a single-surface mesh")
+	var arr := mesh.surface_get_arrays(0)
+	var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+	t.ok(verts.size() > 0, "mesh has geometry (%d verts)" % verts.size())
+	var aabb := mesh.get_aabb()
+	t.ok(aabb.size.x > 0.0 and aabb.size.y > 0.0 and aabb.size.z > 0.0,
+		"mesh has finite 3D bounds (%s)" % aabb.size)
+	var cols: PackedColorArray = arr[Mesh.ARRAY_COLOR]
+	t.ok(cols.size() == verts.size(), "every vertex carries a baked heat colour")
+	t.ok(TitleMeshScript.build("") is ArrayMesh, "empty text builds without crashing")
 
 
 func _test_grid_view_colors(t: TestContext) -> void:

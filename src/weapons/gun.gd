@@ -119,8 +119,19 @@ func _fire() -> void:
 			fired.emit(origin, _target, damage, d)
 	else:
 		# SINGLE — and BEAM falls back to one bolt (ponytail: hitscan not built until a
-		# beam weapon exists).
-		fired.emit(origin, _target, damage, Vector3.ZERO)
+		# beam weapon exists). A weapon with spray_jitter (the SMG) cones each shot off the
+		# aim by a small random yaw so the stream sprays instead of threading one line.
+		var jitter: float = def.spray_jitter if def != null else 0.0
+		if jitter > 0.0 and is_instance_valid(_target):
+			var to := _target.global_position - origin
+			to.y = 0.0
+			if to.length() > 0.001:
+				var d := to.normalized().rotated(Vector3.UP, randf_range(-jitter, jitter))
+				fired.emit(origin, _target, damage, d)
+			else:
+				fired.emit(origin, _target, damage, Vector3.ZERO)
+		else:
+			fired.emit(origin, _target, damage, Vector3.ZERO)
 	_ammo -= 1
 	if _ammo <= 0:
 		_start_reload()
@@ -199,6 +210,8 @@ func _build_body() -> void:
 		add_child(def.model_scene.instantiate())   # imported model supplies its own look
 	elif def != null and def.body == WeaponDefScript.Body.SAWED_OFF:
 		_build_sawed_off()
+	elif def != null and def.body == WeaponDefScript.Body.SMG:
+		_build_smg()
 	else:
 		_build_pistol()
 	_build_flash(tip)
@@ -262,6 +275,46 @@ func _build_sawed_off() -> void:
 	grip.mesh = MeshFactory.beveled_box(Vector3(0.085, 0.2, 0.11), 0.025)
 	grip.material_override = mat
 	grip.position = Vector3(0.0, -0.15, 0.1)       # cut-down pistol grip, same seat as the pistol
+	grip.rotation.x = deg_to_rad(16.0)
+	add_child(grip)
+
+
+## An SMG: the pistol grown long. A stretched receiver, a slim barrel poking well out
+## the -Z front, a short curved magazine below the front, and a stubby stock behind.
+## Same grip-at-origin / barrel-down-(-Z) seating as the pistol so the hand mount and
+## the muzzle (def.barrel_tip, pushed further out) stay aligned.
+func _build_smg() -> void:
+	var mat := _gun_material()
+
+	var receiver := MeshInstance3D.new()
+	receiver.mesh = MeshFactory.beveled_box(Vector3(0.1, 0.13, 0.56), 0.03)
+	receiver.material_override = mat
+	receiver.position = Vector3(0.0, 0.02, -0.08)   # slid forward so the grip stays at the origin
+	add_child(receiver)
+
+	var barrel := MeshInstance3D.new()
+	barrel.mesh = MeshFactory.beveled_box(Vector3(0.06, 0.07, 0.26), 0.02)
+	barrel.material_override = mat
+	barrel.position = Vector3(0.0, 0.03, -0.42)      # slim barrel out the -Z front
+	add_child(barrel)
+
+	var mag := MeshInstance3D.new()
+	mag.mesh = MeshFactory.beveled_box(Vector3(0.07, 0.22, 0.11), 0.02)
+	mag.material_override = mat
+	mag.position = Vector3(0.0, -0.14, -0.18)        # curved-mag stand-in hangs below the front
+	mag.rotation.x = deg_to_rad(-14.0)               # raked forward like a stick mag
+	add_child(mag)
+
+	var stock := MeshInstance3D.new()
+	stock.mesh = MeshFactory.beveled_box(Vector3(0.07, 0.09, 0.16), 0.02)
+	stock.material_override = mat
+	stock.position = Vector3(0.0, 0.03, 0.22)        # stubby stock out the +Z back
+	add_child(stock)
+
+	var grip := MeshInstance3D.new()
+	grip.mesh = MeshFactory.beveled_box(Vector3(0.08, 0.2, 0.1), 0.025)
+	grip.material_override = mat
+	grip.position = Vector3(0.0, -0.14, 0.06)        # pistol grip at the origin, same seat as the pistol
 	grip.rotation.x = deg_to_rad(16.0)
 	add_child(grip)
 

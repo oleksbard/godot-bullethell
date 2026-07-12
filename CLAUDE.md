@@ -23,14 +23,19 @@ rests down. The body only turns *while moving*, toward the midpoint between its 
 targets, so it stays centred with the arms splayed evenly; WASD strafes/backpedals
 and the legs reverse their swing when moving backward. Guns 3–12 (if equipped)
 float around it and self-aim at the i-th closest, as before. Guns auto-fire
-bolts at the closest imps; two enemy types now exist — fast **imps** (1 spawn-budget
-point) and slow tanky **zombies** (2 points, sickly-green eyes, heavy red+green gore;
-mix in from wave 2, share capped so the imp horde never fully gives way) — portalling
-in one at a time (each frozen ~1s in a glowing ground portal as it materializes,
-faster each wave), dying into gib chunks + directional blood that sprays forward along
-the bolt's path; off-screen imps are
-flagged on the screen border. Next
-up: real gun/imp models, player health/damage. Specs: `docs/superpowers/specs/`.
+bolts at the closest imps; three enemy types now exist — fast **imps** (1 spawn-budget
+point), slow tanky **zombies** (2 points, sickly-green eyes, heavy red+green gore;
+mix in from wave 2, share capped so the imp horde never fully gives way), and the
+ranged **revenant** (3 points; a skeletal rocketeer, from wave 1, more common each wave).
+The revenant is the first enemy that *shoots*: it holds at range and lobs slow, dodgeable
+`EnemyBolt`s that damage **only the marine** (never other enemies), fires one bolt every
+~2.5s, occasionally darts back when crowded (not a kite), and its special — granted
+one-at-a-time by a `RevenantCoordinator` — is a rooted **missile barrage** (a wide fan of
+bolts). All types portal in one at a time (each frozen ~1s in a glowing ground portal as it
+materializes, faster each wave), dying into gib chunks + directional blood that sprays
+forward along the bolt's path; off-screen imps are flagged on the screen border. The marine
+has HP (60) and takes damage from melee + revenant bolts. Next up: real gun/imp models.
+Specs: `docs/superpowers/specs/`.
 
 ## Commands
 
@@ -101,10 +106,13 @@ src/
   enemies/ enemy.gd         # shared chaser-enemy AI base: movement, separation, island-clamp, knockback, hit-flash, emerge, melee, death/gore, model build + imp_anim.gdshader wiring; subclass and set tunables in _configure(), model in _model_scene(), gore in _spawn_gore()
            imp.gd           # weak imp (extends enemy.gd); keeps only its model, type label, and per-wave BASE_HP/BASE_ATTACK_DAMAGE/BASE_XP consts
            zombie.gd         # slow (speed 1.4), tanky (BASE_HP 30) 2-point bullet-sponge (extends enemy.gd); sickly-green eyes, heavy red+green death gore; shambles in from wave 2
-           wave_spawner.gd  # point-budget spawner: imp = 1 pt, zombie = 2 pts; zombie share climbs with wave (_zombie_share), capped at 40%; wave 1 = 32 pts, grows linearly
+           revenant.gd       # ranged 3-point elite (extends enemy.gd): holds at range, fires EnemyBolts via _attack_player, backpedals via _steer_intent, missile-barrage special via _release_barrage; from wave 1
+           revenant_coordinator.gd  # grants the revenant missile-barrage one-at-a-time (15s global cooldown), like leap/buff coordinators
+           wave_spawner.gd  # point-budget spawner: imp = 1 pt, zombie = 2 pts, revenant = 3 pts; per-type shares climb with wave (_zombie_share/_revenant_share), capped; wave 1 = 32 pts, grows linearly
   weapons/ gun.gd           # small pistol; self-aims when floating (held guns aimed by the ring), fires bolts, muzzle flash
            weapon_ring.gd   # first 2 pistols fixed in the hands (marine aims via the arm), rest float; gun i targets i-th closest imp
-  fx/      projectile.gd    # straight bolt; aims once at spawn, flies straight, misses if dodged
+  fx/      projectile.gd    # straight bolt fired by a GUN at imps; aims once at spawn, flies straight, misses if dodged
+           enemy_bolt.gd    # straight bolt fired by the REVENANT at the marine; damages ONLY the player (never enemies)
            gib.gd           # a flying chunk of a blown-up imp (ballistic, settles, fades)
            gore.gd          # death FX: gibs + blood both spray forward along the bolt's travel dir
            portal.gd        # spawn portal: dark-red flame-flickering rune-circle decal + super-thin outline ring; flares open/holds/collapses; strobes out if its imp dies first (failed summon)
@@ -115,6 +123,7 @@ src/
 models/    marine_01.glb    # imported rigged marine (Mixamo-style bones, no baked anims)
            imp_opt.glb      # optimized imp model (baked textures)
            zombie_opt.glb   # optimized zombie model (baked textures, 2 329 tris)
+           revenant_opt.glb # optimized revenant model (baked webp textures, 4 079 tris; decimated from revenant.glb via tools/optimize_model.sh elite)
 sound/     pistol_01..05.mp3  impact_01..03.mp3  # shot + hit samples (random per event)
 test/      run_tests.gd     # headless test runner (+ run_tests.sh)
 docs/      guidelines/  ideas/hell-atmosphere.md  superpowers/specs/

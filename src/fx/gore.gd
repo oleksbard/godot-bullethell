@@ -3,14 +3,17 @@ extends RefCounted
 ## Gore for an enemy: a burst of flying body-part chunks (gibs) — no ground decals, the
 ## whole effect is airborne meat. spawn_death() blows the body apart (a wide burst biased
 ## forward along the killing bolt); spawn_hit() sprays a smaller wound burst in the bolt's
-## direction. Callers pass a `gore_amount` (their projectile type) so a heavy weapon throws
-## more chunks. Reference via `const Gore := preload(...)` and call Gore.spawn_death(...).
+## direction. Both scale the chunk count with the `damage` of the blow, so a weak weapon
+## (SMG bolt) gibs far less than a heavy one (pistol) — plus a per-enemy `volume_mult` for
+## bodies that gib heavier (zombie). Reference via `const Gore := preload(...)`.
 
 const GibScript := preload("res://src/fx/gib.gd")
 
 # ── Counts ───────────────────────────────────────────────────────────────────
-const KILL_GIBS := 12          # base chunks a kill throws (+ gore_amount from the killer)
-const HIT_GIBS := 6            # chunks a non-lethal hit sprays off the wound
+const KILL_GIBS_PER_DAMAGE := 2.4   # kill chunks per point of the killing blow (5-dmg pistol ≈ 12, its old flat base)
+const HIT_GIBS_PER_DAMAGE := 1.2    # non-lethal chunks per point of the hit (5-dmg pistol ≈ 6, its old flat base)
+const KILL_GIBS_MIN := 3       # a kill always throws at least this many, however weak the blow
+const HIT_GIBS_MIN := 1        # a non-lethal hit always sprays at least one fleck
 const GIB_CAP := 26            # ponytail: hard ceiling per burst — gibs are per-node physics FX;
                                # pool / MultiMesh them if simultaneous wave-wipes ever spike node count
 
@@ -39,24 +42,25 @@ const GIB_SIZE_MAX := 0.32
 const SPIN := 18.0             # max rad/s tumble on each axis
 
 
-## Blow the body apart at `pos`: KILL_GIBS (+ gore_amount) chunks in a wide burst biased
-## along `hit_dir`. Optional `gib_colors` mixes tints (e.g. the zombie's red+green meat);
-## an empty list tints every chunk with `color` (the enemy's body colour).
-static func spawn_death(parent: Node, pos: Vector3, color: Color, gore_amount: int, hit_dir: Vector3 = Vector3.ZERO, gib_colors: Array = []) -> void:
+## Blow the body apart at `pos`: chunks scaled by `damage` (× `volume_mult` for a heavier
+## body) in a wide burst biased along `hit_dir`. Optional `gib_colors` mixes tints (e.g. the
+## zombie's red+green meat); an empty list tints every chunk with `color` (the body colour).
+static func spawn_death(parent: Node, pos: Vector3, color: Color, damage: float, hit_dir: Vector3 = Vector3.ZERO, gib_colors: Array = [], volume_mult: float = 1.0) -> void:
 	var rng := RandomNumberGenerator.new()
 	rng.randomize()
 	var fwd := _forward(hit_dir, rng)
-	var count := mini(KILL_GIBS + maxi(0, gore_amount), GIB_CAP)
+	var count := clampi(int(round(damage * KILL_GIBS_PER_DAMAGE * volume_mult)), KILL_GIBS_MIN, GIB_CAP)
 	_burst(parent, pos, color, rng, fwd, count, KILL_CONE, gib_colors)
 
 
 ## Lighter feedback for a hit that does NOT kill: a small flesh burst sprayed forward along
 ## `hit_dir` (a tight cone), tinted with the enemy's body colour.
-static func spawn_hit(parent: Node, pos: Vector3, color: Color, hit_dir: Vector3 = Vector3.ZERO) -> void:
+static func spawn_hit(parent: Node, pos: Vector3, color: Color, damage: float, hit_dir: Vector3 = Vector3.ZERO) -> void:
 	var rng := RandomNumberGenerator.new()
 	rng.randomize()
 	var fwd := _forward(hit_dir, rng)
-	_burst(parent, pos, color, rng, fwd, HIT_GIBS, HIT_CONE, [])
+	var count := clampi(int(round(damage * HIT_GIBS_PER_DAMAGE)), HIT_GIBS_MIN, GIB_CAP)
+	_burst(parent, pos, color, rng, fwd, count, HIT_CONE, [])
 
 
 ## Horizontal travel direction from the killing bolt; a random heading if none was supplied

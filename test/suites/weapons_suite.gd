@@ -470,6 +470,13 @@ func _test_weapon_catalog(t: TestContext) -> void:
 	var sg: Object = WeaponCatalogScript.get_def(WeaponCatalogScript.SAWED_OFF)
 	t.ok(sg.pattern == WeaponDefScript.Pattern.SPREAD and sg.pellets >= 2, "sawed-off fires SPREAD with multiple pellets")
 	t.ok(WeaponCatalogScript.weapon_kinds().size() >= 2, "catalog lists at least pistol + sawed-off")
+	# The SMG (automatic): catalog key lines up with Kind, sprays, and its per-weapon fire floor
+	# is low enough for a level-1 item to actually fire fast (the global 0.6 floor is gone).
+	t.ok(WeaponCatalogScript.SMG == InventoryItemScript.Kind.SMG, "catalog SMG key == Kind.SMG (16)")
+	var smg: Object = WeaponCatalogScript.get_def(WeaponCatalogScript.SMG)
+	t.ok(smg.body == WeaponDefScript.Body.SMG and smg.spray_jitter > 0.0, "SMG uses the SMG body and sprays")
+	var smg_item: Object = InventoryItemScript.for_kind(InventoryItemScript.Kind.SMG)
+	t.ok(smg_item.fire_interval_value() < 0.2, "level-1 SMG really fires automatic (interval %.3f)" % smg_item.fire_interval_value())
 
 
 ## The WeaponRing reports a fired shot and its projectile's hit to the injected tracker,

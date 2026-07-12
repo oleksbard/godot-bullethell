@@ -7,7 +7,7 @@ extends RefCounted
 
 enum ItemType { GUN, ARTIFACT, OTHER, EXPANSION }       ## the "Type" tag shown in the tooltip
 enum Pattern { SINGLE, SPREAD, BEAM }        ## firing behaviour; BEAM reserved (see Gun._fire)
-enum Body { PISTOL, SAWED_OFF }              ## which procedural body Gun builds when model_scene is null
+enum Body { PISTOL, SAWED_OFF, SMG }         ## which procedural body Gun builds when model_scene is null
 enum Scope { ADJACENT, GLOBAL, ARTIFACTS }   ## artifact effect reach (who it affects)
 
 const Self := preload("res://src/weapons/weapon_def.gd")   # cold-load safe self-ref (no global class cache)
@@ -24,6 +24,7 @@ var placeholder_color: Color = Color(0.45, 0.55, 0.75, 0.95)
 # Base combat stats (level-1 values; InventoryItem applies the shared scaling)
 var damage: float = 5.0
 var fire_interval: float = 1.7
+var fire_interval_min: float = 0.6             # per-weapon fire-rate floor; level scaling won't push below this
 var magazine: int = 7
 var reload: float = 2.0
 var range: float = 12.0                        # display-only targeting range (≈ WeaponRing.MAX_RANGE)
@@ -41,11 +42,10 @@ var effect: Dictionary = {}                    # interpreted by ArtifactResolver
 var pattern: int = Pattern.SINGLE
 var pellets: int = 1                           # SPREAD pellet count
 var spread_arc: float = 0.0                    # SPREAD total fan angle (radians)
+var spray_jitter: float = 0.0                  # SINGLE per-shot aim jitter (±radians about Y); 0 = dead-accurate
 
 # Projectile
 var proj_speed: float = 38.25
-var gore_min: int = 1          # extra gore chunks a kill by this weapon throws (min)
-var gore_max: int = 4          # ...and max (rolled per hit; see Projectile/Gore)
 
 # Audio
 var shot_clips: Array = []                     # clip paths; empty -> no sound

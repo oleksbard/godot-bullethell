@@ -11,6 +11,7 @@ enum Kind {
 	RUNE_OF_WRATH, HELLFIRE_COIL, QUICKSILVER_SIGIL, HOARDERS_MARK,
 	GREATER_WRATH, CHAIN_SIGIL, RESONATOR, CONDUIT, THE_FURNACE, THE_SUN,
 	EXPAND_1X3, EXPAND_1X4,   # appended at the end so existing kind values stay stable
+	SMG,                      # 16
 }
 
 const Self := preload("res://src/inventory/inventory_item.gd")   # cold-load safe self-ref
@@ -28,8 +29,7 @@ const RARITY_LEGENDARY := "Legendary"
 # weapon = POWER_BASE. The roll is biased toward low levels with a falloff that
 # flattens as rarity_bonus rises (the "Increased Rarity" strategy).
 const DMG_PER_LEVEL := 0.4              # +40% base damage per level
-const FIRE_SPEEDUP_PER_LEVEL := 0.05   # -5% fire interval per level
-const FIRE_INTERVAL_MIN := 0.6         # floor so high levels don't fire absurdly fast
+const FIRE_SPEEDUP_PER_LEVEL := 0.05   # -5% fire interval per level (floor is per-weapon: WeaponDef.fire_interval_min)
 const RELOAD_SPEEDUP_PER_LEVEL := 0.07 # -7% reload time per level (higher level reloads faster)
 const RELOAD_MIN := 0.8                # floor so high levels don't reload instantly
 const POWER_BASE := 10.0               # a level-1 weapon's power
@@ -159,7 +159,7 @@ func damage_value() -> float:
 
 ## Level-scaled fire interval: faster at higher levels, floored.
 func fire_interval_value() -> float:
-	return maxf(FIRE_INTERVAL_MIN, _def().fire_interval * (1.0 - FIRE_SPEEDUP_PER_LEVEL * float(item_level - 1)))
+	return maxf(_def().fire_interval_min, _def().fire_interval * (1.0 - FIRE_SPEEDUP_PER_LEVEL * float(item_level - 1)))
 
 
 ## Magazine size — shots fired before the gun must reload.

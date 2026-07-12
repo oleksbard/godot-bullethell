@@ -26,15 +26,20 @@ func setup(from: Vector3, to: Vector3) -> void:
 	# in-ground perpendicular. Built as an explicit basis + global_transform so it's correct
 	# regardless of the parent's transform.
 	var perp := Vector3(-fwd.z, 0.0, fwd.x)
-	global_transform = Transform3D(Basis(fwd, Vector3.UP, perp), (from + to) * 0.5 + Vector3(0.0, Y_LIFT, 0.0))
+	# Extend one arrow-length past the landing point so the leading chevron has room to form
+	# fully instead of being clipped by the quad's front edge (the tip-feather fades out here,
+	# past the landing point). The strip centre shifts forward by half that extension.
+	var strip_len := dist + CHEVRON_LEN
+	var centre := (from + to) * 0.5 + fwd * (CHEVRON_LEN * 0.5) + Vector3(0.0, Y_LIFT, 0.0)
+	global_transform = Transform3D(Basis(fwd, Vector3.UP, perp), centre)
 
 	_strip_mat = ShaderMaterial.new()
 	_strip_mat.shader = STRIP_SHADER
 	_strip_mat.set_shader_parameter("color", Vector3(COLOR.r, COLOR.g, COLOR.b))
 	# One arrow per CHEVRON_LEN of world length -> arrows keep a constant shape regardless of leap distance.
-	_strip_mat.set_shader_parameter("chevrons", maxf(2.0, roundf(dist / CHEVRON_LEN)))
+	_strip_mat.set_shader_parameter("chevrons", maxf(2.0, roundf(strip_len / CHEVRON_LEN)))
 	var plane := PlaneMesh.new()               # lies flat in XZ, faces +Y; UV.x runs along +X
-	plane.size = Vector2(dist, WIDTH)
+	plane.size = Vector2(strip_len, WIDTH)
 	var strip := MeshInstance3D.new()
 	strip.mesh = plane
 	strip.material_override = _strip_mat

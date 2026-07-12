@@ -10,6 +10,7 @@ const WeaponDefScript := preload("res://src/weapons/weapon_def.gd")
 
 const PISTOL := 0       # == InventoryItem.Kind.PISTOL (asserted in tests)
 const SAWED_OFF := 1    # == InventoryItem.Kind.SAWED_OFF
+const SMG := 16         # == InventoryItem.Kind.SMG (appended at the enum end)
 const EXPAND_1X1 := 2    # == InventoryItem.Kind.EXPAND_1X1
 const EXPAND_2X2 := 3    # == InventoryItem.Kind.EXPAND_2X2
 const EXPAND_1X3 := 14   # == InventoryItem.Kind.EXPAND_1X3 (appended at the enum end)
@@ -38,6 +39,9 @@ const PISTOL_CELLS: Array[Vector2i] = [
 ]
 const SAWED_OFF_CELLS: Array[Vector2i] = [
 	Vector2i(0, 0), Vector2i(0, 1), Vector2i(0, 2),                   # X / X / X (3 tall, 1 wide)
+]
+const SMG_CELLS: Array[Vector2i] = [
+	Vector2i(0, 0), Vector2i(1, 0), Vector2i(0, 1),                   # XX / X. (2 wide, 2 tall, 3 cells)
 ]
 const EXPAND_1X1_CELLS: Array[Vector2i] = [Vector2i(0, 0)]
 const EXPAND_2X2_CELLS: Array[Vector2i] = [
@@ -118,7 +122,7 @@ static func _build() -> void:
 		"placeholder_color": Color(0.45, 0.55, 0.75, 0.95),
 		"damage": 5.0, "fire_interval": 1.0, "magazine": 7, "reload": 1.5, "range": 11.0,
 		"pattern": WeaponDefScript.Pattern.SINGLE,
-		"proj_speed": 38.25, "gore_min": 1, "gore_max": 4,
+		"proj_speed": 38.25,
 		"shot_clips": PISTOL_CLIPS.duplicate(), "shot_peaks_db": PISTOL_PEAKS_DB.duplicate(),
 	})
 	_defs[SAWED_OFF] = WeaponDefScript.from({
@@ -132,9 +136,24 @@ static func _build() -> void:
 		"damage": 2.0, "fire_interval": 1.1, "magazine": 2, "reload": 1.6, "range": 6.0,
 		"base_price": 14,                                     # pricier than the 10-soul default
 		"pattern": WeaponDefScript.Pattern.SPREAD, "pellets": 6, "spread_arc": deg_to_rad(34.0),
-		"proj_speed": 30.0, "gore_min": 2, "gore_max": 6,
+		"proj_speed": 30.0,
 		"body": WeaponDefScript.Body.SAWED_OFF, "barrel_tip": Vector3(0.0, 0.02, -0.32),
 		"shot_clips": SAWED_OFF_CLIPS.duplicate(),
+	})
+	_defs[SMG] = WeaponDefScript.from({
+		"name": "Ripper",
+		"item_type": WeaponDefScript.ItemType.GUN,
+		"traits": ["Projectile", "Automatic"],
+		"flavor": "Empties a magazine before the first casing hits the dirt. Won't win any single shot — wins all forty.",
+		"cells": SMG_CELLS.duplicate(),
+		"icon_path": "res://assets/smg.png",
+		"placeholder_color": Color(0.8, 0.4, 0.25, 0.95),
+		"base_price": 18,                                     # pricier than the 10-soul default (strong sustained DPS)
+		"damage": 1.0, "fire_interval": 0.143, "fire_interval_min": 0.08, "magazine": 40, "reload": 2.8, "range": 11.0,
+		"pattern": WeaponDefScript.Pattern.SINGLE, "spray_jitter": deg_to_rad(9.0),
+		"proj_speed": 45.0,
+		"body": WeaponDefScript.Body.SMG, "barrel_tip": Vector3(0.0, 0.03, -0.56),
+		"shot_clips": PISTOL_CLIPS.duplicate(), "shot_peaks_db": PISTOL_PEAKS_DB.duplicate(),
 	})
 	_defs[EXPAND_1X1] = WeaponDefScript.from({
 		"name": "Iron Clasp",

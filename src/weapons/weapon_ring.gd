@@ -214,10 +214,8 @@ func _on_gun_fired(origin: Vector3, target: Node3D, damage: float, aim_dir: Vect
 	p.target = target
 	p.damage = damage
 	p.aim_dir = aim_dir
-	if gun.def != null:                  # per-weapon bolt: speed, gore volume + range from the def
+	if gun.def != null:                  # per-weapon bolt: speed + range from the def (gore now scales with damage)
 		p.speed = gun.def.proj_speed
-		p.gore_min = gun.def.gore_min
-		p.gore_max = gun.def.gore_max
 		p.max_range = gun.def.range
 	p.hit_enemy.connect(_impact.play)    # softer thud when this bolt connects
 	if tracker != null:

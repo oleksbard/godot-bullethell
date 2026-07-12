@@ -14,8 +14,10 @@ signal wave_cleared()            # drip done & 0 imps left (Main banks uncollect
 
 const ImpScript := preload("res://src/enemies/imp.gd")
 const ZombieScript := preload("res://src/enemies/zombie.gd")
+const RevenantScript := preload("res://src/enemies/revenant.gd")
 const LeapCoordinatorScript := preload("res://src/enemies/leap_coordinator.gd")
 const BuffCoordinatorScript := preload("res://src/enemies/buff_coordinator.gd")
+const RevenantCoordinatorScript := preload("res://src/enemies/revenant_coordinator.gd")
 const PortalScript := preload("res://src/fx/portal.gd")
 const IslandShape := preload("res://src/lib/island_shape.gd")
 const ObstacleFieldScript := preload("res://src/world/obstacle_field.gd")
@@ -57,6 +59,16 @@ const ZOMBIE_SHARE_PER_WAVE := 0.06
 const ZOMBIE_SHARE_CAP := 0.4
 const ZOMBIE_SOUL_BASE := 2          # a zombie drops ~2x an imp's souls (1) before the wave bonus
 
+# Revenant mix: a ranged elite costing REVENANT_COST budget points. It's present from wave 1
+# (rare) and grows more common with the wave, capped; the 3-point cost self-limits how many
+# a wave can afford, so it never crowds out the imp horde.
+const REVENANT_COST := 3
+const REVENANT_START_WAVE := 1
+const REVENANT_SHARE_BASE := 0.05    # per-spawn chance at wave 1 (~1-2 revenants in wave 1)
+const REVENANT_SHARE_PER_WAVE := 0.03
+const REVENANT_SHARE_CAP := 0.25
+const REVENANT_SOUL_BASE := 3        # a revenant drops ~3x an imp's souls before the wave bonus
+
 const SPAWN_INTERVAL_1 := 0.6    # seconds between spawns in wave 1
 const SPAWN_SPEEDUP := 0.8       # interval ×= this each wave -> later waves spawn faster
 const SPAWN_INTERVAL_MIN := 0.1  # floor so high waves don't all pop at once
@@ -95,6 +107,10 @@ func _ready() -> void:
 	add_child(leaper)
 	# Buff special: one coordinator grants the zombie AoE-haste channel one-at-a-time.
 	add_child(BuffCoordinatorScript.new())
+	# Barrage special: one coordinator grants the revenant missile barrage one-at-a-time.
+	var barrager := RevenantCoordinatorScript.new()
+	barrager.player = player
+	add_child(barrager)
 	_start_wave()
 
 
@@ -179,6 +195,14 @@ func _zombie_share(wave: int) -> float:
 	return clampf(float(wave - 1) * ZOMBIE_SHARE_PER_WAVE, 0.0, ZOMBIE_SHARE_CAP)
 
 
+## The fraction of a wave's spawn budget eligible to become revenants. Nonzero from wave 1
+## (rare), climbs with the wave, capped. Pure (testable).
+func _revenant_share(wave: int) -> float:
+	if wave < REVENANT_START_WAVE:
+		return 0.0
+	return clampf(REVENANT_SHARE_BASE + float(wave - 1) * REVENANT_SHARE_PER_WAVE, 0.0, REVENANT_SHARE_CAP)
+
+
 ## Count of live imps still in the wave.
 func _alive() -> int:
 	var n := 0
@@ -194,7 +218,10 @@ func _alive() -> int:
 func _spawn_one() -> void:
 	var pt := _scatter_point()
 	var is_champion := _champions_left > 0
-	var make_zombie := (not is_champion) and _to_spawn >= ZOMBIE_COST and _rng.randf() < _zombie_share(_wave)
+	# Roll the pricier ranged elite first, then the zombie, else an imp. Each roll is gated by
+	# its budget cost so the drip never overspends (the tail fills with cost-1 imps).
+	var make_revenant := (not is_champion) and _to_spawn >= REVENANT_COST and _rng.randf() < _revenant_share(_wave)
+	var make_zombie := (not is_champion) and not make_revenant and _to_spawn >= ZOMBIE_COST and _rng.randf() < _zombie_share(_wave)
 
 	var enemy: Node3D
 	var base_hp: float
@@ -202,7 +229,14 @@ func _spawn_one() -> void:
 	var base_xp: float
 	var soul_base: int
 	var cost: int
-	if make_zombie:
+	if make_revenant:
+		enemy = RevenantScript.new()
+		base_hp = RevenantScript.BASE_HP
+		base_atk = RevenantScript.BASE_ATTACK_DAMAGE
+		base_xp = RevenantScript.BASE_XP
+		soul_base = REVENANT_SOUL_BASE
+		cost = REVENANT_COST
+	elif make_zombie:
 		enemy = ZombieScript.new()
 		base_hp = ZombieScript.BASE_HP
 		base_atk = ZombieScript.BASE_ATTACK_DAMAGE

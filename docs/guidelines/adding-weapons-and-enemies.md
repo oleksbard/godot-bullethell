@@ -101,16 +101,18 @@ Adding a **new firing behaviour** (not a bolt — e.g. beam, shotgun spread, hom
 
 ## Part 2 — Enemies
 
-Two enemies exist — **Imp** and **Zombie** — both subclassing the shared `Enemy`
-base (`src/enemies/enemy.gd`). Everything that targets or counts enemies keys on
-the group string **`Enemy.GROUP` = `"imps"`** — both types join it, and so must
-any new enemy (or you must generalize targeting).
+Three enemies exist — **Imp**, **Zombie**, and the ranged **Revenant** — all
+subclassing the shared `Enemy` base (`src/enemies/enemy.gd`). Everything that targets
+or counts enemies keys on the group string **`Enemy.GROUP` = `"imps"`** — all types
+join it, and so must any new enemy (or you must generalize targeting).
 
 | Service | File | Responsibility |
 |---|---|---|
 | **Base AI** | `src/enemies/enemy.gd` | Shared chaser logic: movement, separation, island-clamp, knockback, hit-flash, emerge, melee, death/gore, model build + shader wiring |
 | Animation | `src/enemies/imp_anim.gdshader` | Vertex walk/attack/death + glowing eyes (no skeleton); reused by both enemy types |
 | Spawner | `src/enemies/wave_spawner.gd` | Point-budget drip: imp = 1 pt, zombie = 2 pts; zombie share gated/capped by `_zombie_share(wave)`, zombies from wave 2 |
+| Enemy fire | `src/fx/enemy_bolt.gd` | Bolt fired by a ranged enemy (Revenant) at the marine; damages **only the player** (never scans the `"imps"` group) |
+| Barrage special | `src/enemies/revenant_coordinator.gd` | Grants the revenant missile barrage one-at-a-time (15s global cooldown), like the leap/buff coordinators |
 | Spawn FX | `src/fx/portal.gd` | Summoning circle; freezes the monster via `emerge()` |
 | Death FX | `src/fx/gore.gd` + `gib.gd` | Gib chunks + directional blood decals; accepts optional `blood_tints`/`gib_colors` lists (zombie uses red+green) |
 | Combat numbers | `src/fx/damage_number.gd` | Flying damage numbers (free via `take_damage`) |
@@ -121,10 +123,13 @@ any new enemy (or you must generalize targeting).
 
 **Base class (`enemy.gd`) + subclasses (`imp.gd`, `zombie.gd`):**
 
-Shared logic lives in `Enemy` (`src/enemies/enemy.gd`). Subclasses override three hooks:
+Shared logic lives in `Enemy` (`src/enemies/enemy.gd`). Subclasses override these hooks:
 - `_configure()` — set instance vars (`speed`, `model_height`, `eye_color`, gait knobs, etc.). Called before `_ready` populates the node. Do **not** touch spawner-set combat numbers (`max_hp`, `attack_damage`, `xp_value`) here.
 - `_model_scene() -> PackedScene` — return the preloaded GLB for this enemy.
 - `_spawn_gore(blood_spatters, hit_dir)` — override to change the death FX palette (default = imp red via `Gore.spawn_death`).
+- `_attack_player()` — how the attack is delivered when in range + off cooldown. Default = instant melee (`player.take_damage`). **Ranged** enemies (Revenant) override to fire a projectile instead.
+- `_steer_intent(to_player, delta) -> Vector3` — the per-frame movement intent before swarm separation. Default = chase until `stop_dist`. Ranged enemies override to hold at firing range / backpedal.
+- `_release_barrage()` — the volley fired at the climax of the rooted barrage special (default no-op). Set `can_special_barrage = true` in `_configure()` and add a `RevenantCoordinator` to grant it; the Revenant fires a fan of `EnemyBolt`s.
 
 Per-wave scaling consts (`BASE_HP`, `BASE_ATTACK_DAMAGE`, `BASE_XP`) live on the **subclass** as `const`, so the spawner can read them without instantiating. `ENEMY_NAME` is a `const String` returned by `enemy_type()`.
 
